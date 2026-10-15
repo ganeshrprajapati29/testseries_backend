@@ -1,0 +1,28 @@
+import { Router } from 'express';
+import * as c from '../controllers/auth.controller.js';
+import { authenticate, optionalAuth } from '../middleware/authenticate.js';
+import { authLimiter, passwordResetLimiter } from '../middleware/rateLimiter.js';
+import { validate } from '../middleware/validate.js';
+import { asyncHandler } from '../utils/asyncHandler.js';
+import {
+  changePasswordSchema,
+  forgotPasswordSchema,
+  loginSchema,
+  registerSchema,
+  resetPasswordSchema,
+} from '../validators/auth.validator.js';
+
+const router = Router();
+
+router.get('/csrf', asyncHandler(c.csrf));
+router.get('/me', optionalAuth, asyncHandler(c.me));
+router.post('/register', authLimiter, validate({ body: registerSchema }), asyncHandler(c.register));
+router.post('/login', authLimiter, validate({ body: loginSchema }), asyncHandler(c.login));
+router.post('/admin/login', authLimiter, validate({ body: loginSchema }), asyncHandler(c.adminLogin));
+router.post('/logout', optionalAuth, asyncHandler(c.logout));
+router.post('/logout-all', authenticate, asyncHandler(c.logoutAll));
+router.post('/forgot-password', passwordResetLimiter, validate({ body: forgotPasswordSchema }), asyncHandler(c.forgotPassword));
+router.post('/reset-password', authLimiter, validate({ body: resetPasswordSchema }), asyncHandler(c.resetPassword));
+router.post('/change-password', authenticate, authLimiter, validate({ body: changePasswordSchema }), asyncHandler(c.changePassword));
+
+export default router;

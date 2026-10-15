@@ -1,0 +1,33 @@
+import { Router } from 'express';
+import mongoose from 'mongoose';
+import adminRoutes from './admin.routes.js';
+import authRoutes from './auth.routes.js';
+import { publicCategoryRouter } from './category.routes.js';
+import examinationRoutes from './examination.routes.js';
+import paymentRoutes from './payment.routes.js';
+import pyqsRoutes from './pyqs.routes.js';
+import { studentResultRouter } from './result.routes.js';
+import { publicSettingsRouter } from './settings.routes.js';
+import studentRoutes from './student.routes.js';
+import { publicTestRouter } from './test.routes.js';
+import { publicSeriesRouter } from './testSeries.routes.js';
+import userRoutes from './user.routes.js';
+const router = Router();
+router.get('/health', (_req, res) => {
+    const dbState = mongoose.connection.readyState === 1 ? 'up' : 'down';
+    res.status(dbState === 'up' ? 200 : 503).json({ success: dbState === 'up', data: { status: 'ok', database: dbState, time: new Date().toISOString() } });
+});
+router.use('/auth', authRoutes);
+router.use('/users', userRoutes);
+router.use('/settings', publicSettingsRouter);
+router.use('/categories', publicCategoryRouter);
+router.use('/test-series', publicSeriesRouter);
+router.use('/tests', publicTestRouter);
+router.use('/pyqs', pyqsRoutes);
+router.use('/exams', examinationRoutes);
+router.use('/results', studentResultRouter);
+router.use('/student', studentRoutes);
+router.use('/payments', paymentRoutes);
+router.use('/admin', adminRoutes);
+export default router;
+//# sourceMappingURL=index.js.map

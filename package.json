@@ -1,0 +1,67 @@
+{
+  "name": "civil-sansad-server",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Civil Sansad Test Series & PYQs Platform - REST API",
+  "type": "module",
+  "main": "dist/server.js",
+  "engines": {
+    "node": ">=20.11"
+  },
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc -p tsconfig.build.json",
+    "start": "node dist/server.js",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "seed": "tsx src/seed/index.ts",
+    "seed:categories": "tsx src/seed/seedCategories.ts",
+    "seed:demo": "tsx src/seed/seedDemoTests.ts",
+    "create-admin": "tsx src/seed/seedAdmin.ts",
+    "seed:prod": "node dist/seed/index.js",
+    "create-admin:prod": "node dist/seed/seedAdmin.js"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.1152.0",
+    "argon2": "^0.45.1",
+    "compression": "^1.8.2",
+    "cookie-parser": "^1.4.7",
+    "cors": "^2.8.6",
+    "csv-parse": "^7.0.3",
+    "dotenv": "^17.4.2",
+    "exceljs": "^4.4.0",
+    "express": "^5.3.0",
+    "express-rate-limit": "^8.7.1",
+    "helmet": "^8.3.0",
+    "mongoose": "^8.24.5",
+    "multer": "^2.4.0",
+    "nodemailer": "^10.1.1",
+    "pino": "^10.4.0",
+    "pino-http": "^11.0.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.5",
+    "@types/compression": "^1.8.1",
+    "@types/cookie-parser": "^1.4.10",
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/multer": "^2.3.0",
+    "@types/node": "^24.19.2",
+    "@types/nodemailer": "^8.0.2",
+    "@types/supertest": "^7.2.1",
+    "eslint": "^9.39.5",
+    "globals": "^17.13.0",
+    "pino-pretty": "^13.2.0",
+    "supertest": "^7.3.1",
+    "tsx": "^4.23.15",
+    "typescript": "~5.9.3",
+    "typescript-eslint": "^8.71.2",
+    "vitest": "^5.0.4"
+  },
+  "overrides": {
+    "uuid": "^11.1.1"
+  }
+}

@@ -1,0 +1,26 @@
+import { Router } from 'express';
+import { z } from 'zod';
+import * as c from '../controllers/test.controller.js';
+import { optionalAuth } from '../middleware/authenticate.js';
+import { requirePermission } from '../middleware/authorize.js';
+import { validate } from '../middleware/validate.js';
+import { asyncHandler } from '../utils/asyncHandler.js';
+import { idParams, objectId, slugParams } from '../validators/common.js';
+import { addQuestionsSchema, createTestSchema, listTestsAdminQuery, setQuestionsSchema, testPublishSchema, updateTestSchema, } from '../validators/test.validator.js';
+export const publicTestRouter = Router();
+publicTestRouter.get('/:slug', optionalAuth, validate({ params: slugParams }), asyncHandler(c.detail));
+export const adminTestRouter = Router();
+const read = requirePermission('content:read');
+const write = requirePermission('content:write');
+adminTestRouter.get('/', read, validate({ query: listTestsAdminQuery }), asyncHandler(c.adminList));
+adminTestRouter.post('/', write, validate({ body: createTestSchema }), asyncHandler(c.create));
+adminTestRouter.get('/:id', read, validate({ params: idParams }), asyncHandler(c.adminGet));
+adminTestRouter.get('/:id/preview', read, validate({ params: idParams }), asyncHandler(c.preview));
+adminTestRouter.patch('/:id', write, validate({ params: idParams, body: updateTestSchema }), asyncHandler(c.update));
+adminTestRouter.put('/:id/questions', write, validate({ params: idParams, body: setQuestionsSchema }), asyncHandler(c.setQuestions));
+adminTestRouter.post('/:id/questions', write, validate({ params: idParams, body: addQuestionsSchema }), asyncHandler(c.addQuestions));
+adminTestRouter.delete('/:id/questions/:questionId', write, validate({ params: z.object({ id: objectId, questionId: objectId }) }), asyncHandler(c.removeQuestion));
+adminTestRouter.post('/:id/publication', write, validate({ params: idParams, body: testPublishSchema }), asyncHandler(c.setPublication));
+adminTestRouter.post('/:id/duplicate', write, validate({ params: idParams }), asyncHandler(c.duplicate));
+adminTestRouter.delete('/:id', write, validate({ params: idParams }), asyncHandler(c.remove));
+//# sourceMappingURL=test.routes.js.map
