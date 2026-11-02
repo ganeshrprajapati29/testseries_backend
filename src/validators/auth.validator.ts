@@ -10,19 +10,33 @@ export const passwordSchema = z
 
 export const emailSchema = z.string().trim().max(254).email('Enter a valid email address');
 
+export const MOBILE_RE = /^(\+91[-\s]?)?[6-9]\d{9}$/;
+
+/** "+91 98765 43210" -> "9876543210" so the same number is always stored the same way. */
+export const toTenDigits = (v: string) => v.replace(/\D/g, '').slice(-10);
+
 export const mobileSchema = z
   .string()
   .trim()
-  .regex(/^(\+91[-\s]?)?[6-9]\d{9}$/, 'Enter a valid 10 digit Indian mobile number')
+  .regex(MOBILE_RE, 'Enter a valid 10 digit Indian mobile number')
+  .transform(toTenDigits)
   .optional()
   .or(z.literal('').transform(() => undefined));
+
+/** Required mobile (registration / admin-created students). */
+export const requiredMobileSchema = z
+  .string({ error: 'Mobile number is required' })
+  .trim()
+  .min(1, 'Mobile number is required')
+  .regex(MOBILE_RE, 'Enter a valid 10 digit Indian mobile number')
+  .transform(toTenDigits);
 
 export const nameSchema = z.string().trim().min(2, 'Name must be at least 2 characters').max(100);
 
 export const registerSchema = z.object({
   name: nameSchema,
   email: emailSchema,
-  mobile: mobileSchema,
+  mobile: requiredMobileSchema,
   password: passwordSchema,
 });
 
@@ -41,4 +55,9 @@ export const resetPasswordSchema = z.object({
 export const changePasswordSchema = z.object({
   currentPassword: z.string().min(1, 'Current password is required').max(PASSWORD_POLICY.maxLength),
   newPassword: passwordSchema,
+});
+
+export const changeEmailSchema = z.object({
+  currentPassword: z.string().min(1, 'Current password is required').max(PASSWORD_POLICY.maxLength),
+  newEmail: emailSchema,
 });

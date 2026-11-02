@@ -9,6 +9,7 @@ import '../models/Order.model.js';
 import '../models/PasswordReset.model.js';
 import '../models/Payment.model.js';
 import '../models/Question.model.js';
+import '../models/QuestionReport.model.js';
 import '../models/Result.model.js';
 import '../models/Session.model.js';
 import '../models/SiteSetting.model.js';

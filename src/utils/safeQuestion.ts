@@ -20,6 +20,8 @@ export interface QuestionLike {
   correctOption?: string;
   explanation?: string | null;
   imageUrl?: string | null;
+  images?: string[] | null;
+  explanationImages?: string[] | null;
   language?: string | null;
   translations?: TranslationLike[] | null;
   subject?: string | null;
@@ -32,6 +34,8 @@ export interface SafeQuestion {
   id: string;
   questionText: string;
   imageUrl: string;
+  /** All question figures in display order (imageUrl first). */
+  images: string[];
   options: { key: string; text: string; imageUrl: string }[];
   translations: { language: string; questionText: string; options: { key: string; text: string }[] }[];
   subject: string;
@@ -52,6 +56,7 @@ export function toSafeQuestion(q: QuestionLike, optionOrder?: string[] | null): 
     id: String(q._id),
     questionText: q.questionText,
     imageUrl: q.imageUrl ?? '',
+    images: [...new Set([q.imageUrl ?? '', ...(q.images ?? [])].filter(Boolean))],
     options: orderOptions(q.options, optionOrder).map((o) => ({ key: o.key, text: o.text ?? '', imageUrl: o.imageUrl ?? '' })),
     translations: (q.translations ?? []).map((t) => ({
       language: t.language,
@@ -68,6 +73,7 @@ export function toSolutionQuestion(q: QuestionLike, optionOrder?: string[] | nul
   return {
     ...toSafeQuestion(q, optionOrder),
     explanation: q.explanation ?? '',
+    explanationImages: q.explanationImages ?? [],
     translations: (q.translations ?? []).map((t) => ({
       language: t.language,
       questionText: t.questionText,

@@ -1,14 +1,17 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import * as c from '../controllers/test.controller.js';
-import { optionalAuth } from '../middleware/authenticate.js';
-import { requirePermission } from '../middleware/authorize.js';
+import { authenticate, optionalAuth } from '../middleware/authenticate.js';
+import { requirePermission, requireRole } from '../middleware/authorize.js';
 import { validate } from '../middleware/validate.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { idParams, objectId, slugParams } from '../validators/common.js';
 import { addQuestionsSchema, createTestSchema, listTestsAdminQuery, setQuestionsSchema, testPublishSchema, updateTestSchema, } from '../validators/test.validator.js';
 export const publicTestRouter = Router();
+const pdfParams = z.object({ slug: z.string().trim().min(1).max(120).regex(/^[a-z0-9-]+$/), kind: z.enum(['question-paper', 'solutions']) });
 publicTestRouter.get('/:slug', optionalAuth, validate({ params: slugParams }), asyncHandler(c.detail));
+publicTestRouter.get('/:slug/pdf/:kind', authenticate, validate({ params: pdfParams }), asyncHandler(c.pdf));
+publicTestRouter.get('/:slug/paper', authenticate, requireRole('student'), validate({ params: slugParams }), asyncHandler(c.paper));
 export const adminTestRouter = Router();
 const read = requirePermission('content:read');
 const write = requirePermission('content:write');
@@ -16,6 +19,8 @@ adminTestRouter.get('/', read, validate({ query: listTestsAdminQuery }), asyncHa
 adminTestRouter.post('/', write, validate({ body: createTestSchema }), asyncHandler(c.create));
 adminTestRouter.get('/:id', read, validate({ params: idParams }), asyncHandler(c.adminGet));
 adminTestRouter.get('/:id/preview', read, validate({ params: idParams }), asyncHandler(c.preview));
+adminTestRouter.get('/:id/paper', read, validate({ params: idParams }), asyncHandler(c.adminPaper));
+adminTestRouter.get('/:id/pdf/:kind', read, validate({ params: z.object({ id: objectId, kind: z.enum(['question-paper', 'solutions']) }) }), asyncHandler(c.adminPdf));
 adminTestRouter.patch('/:id', write, validate({ params: idParams, body: updateTestSchema }), asyncHandler(c.update));
 adminTestRouter.put('/:id/questions', write, validate({ params: idParams, body: setQuestionsSchema }), asyncHandler(c.setQuestions));
 adminTestRouter.post('/:id/questions', write, validate({ params: idParams, body: addQuestionsSchema }), asyncHandler(c.addQuestions));

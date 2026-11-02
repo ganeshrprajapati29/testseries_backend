@@ -15,6 +15,7 @@ export function toSafeQuestion(q, optionOrder) {
         id: String(q._id),
         questionText: q.questionText,
         imageUrl: q.imageUrl ?? '',
+        images: [...new Set([q.imageUrl ?? '', ...(q.images ?? [])].filter(Boolean))],
         options: orderOptions(q.options, optionOrder).map((o) => ({ key: o.key, text: o.text ?? '', imageUrl: o.imageUrl ?? '' })),
         translations: (q.translations ?? []).map((t) => ({
             language: t.language,
@@ -30,6 +31,7 @@ export function toSolutionQuestion(q, optionOrder) {
     return {
         ...toSafeQuestion(q, optionOrder),
         explanation: q.explanation ?? '',
+        explanationImages: q.explanationImages ?? [],
         translations: (q.translations ?? []).map((t) => ({
             language: t.language,
             questionText: t.questionText,

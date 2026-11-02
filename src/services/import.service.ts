@@ -11,6 +11,9 @@ import { buildMeta, pageParams } from '../utils/pagination.js';
 import { questionContentHash } from '../utils/safeQuestion.js';
 import { cleanText } from '../utils/sanitize.js';
 import { createQuestionSchema } from '../validators/question.validator.js';
+import { CategoryModel } from '../models/Category.model.js';
+import { slugify } from '../utils/slugify.js';
+import { categoryLabels, resolveCategoryLinks } from './questionCategory.service.js';
 
 export const MAX_IMPORT_ROWS = 2000;
 
@@ -37,6 +40,10 @@ export const TEMPLATE_HEADERS = [
   'optionD_hi',
   'optionE_hi',
   'explanation_hi',
+  'imageUrl',
+  'images',
+  'explanationImages',
+  'category',
 ];
 
 export function templateCsv(): string {
@@ -63,6 +70,10 @@ export function templateCsv(): string {
     'अनुच्छेद 356',
     '',
     'अनुच्छेद 32 नागरिकों को मौलिक अधिकारों के प्रवर्तन हेतु सर्वोच्च न्यायालय जाने का अधिकार देता है।',
+    '',
+    '',
+    '',
+    'upsc/prelims/paper-i',
   ];
   const esc = (v: string) => (/[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v);
   return `${String.fromCharCode(0xfeff)}${TEMPLATE_HEADERS.join(',')}\n${sample.map(esc).join(',')}\n`;
@@ -128,6 +139,7 @@ function parseCorrect(value: string, optionCount: number): string {
 }
 
 interface Defaults {
+  categoryId?: string | null;
   subject: string;
   topic: string;
   sourceExam: string;
@@ -135,7 +147,39 @@ interface Defaults {
   language: 'en' | 'hi';
 }
 
-function rowToQuestion(row: RawRow, defaults: Defaults) {
+/**
+ * Lookup of category paths -> id. Accepts slug paths ("defence/cds/maths"), name paths
+ * ("Defence > CDS > Maths"), and an optional "pyqs:" / "test-series:" prefix.
+ */
+async function categoryLookup() {
+  const cats = await CategoryModel.find({ status: { $ne: 'archived' } }, { slug: 1, name: 1, ancestors: 1, moduleType: 1 }).lean();
+  const slugOf = new Map(cats.map((c) => [String(c._id), c.slug]));
+  const nameOf = new Map(cats.map((c) => [String(c._id), slugify(c.name)]));
+  const map = new Map<string, string>();
+  const add = (path: string, c: (typeof cats)[number]) => {
+    map.set(path, String(c._id));
+    map.set(`${c.moduleType === 'PYQS' ? 'pyqs' : 'test-series'}:${path}`, String(c._id));
+  };
+  // Name based paths first, slug paths last so an exact slug path always wins.
+  // Test Series paths are added after PYQ paths so they win when both trees have the same path.
+  const ordered = [...cats.filter((x) => x.moduleType === 'PYQS'), ...cats.filter((x) => x.moduleType !== 'PYQS')];
+  for (const c of ordered) add([...c.ancestors.map((a) => nameOf.get(String(a)) ?? ''), slugify(c.name)].join('/'), c);
+  for (const c of ordered) add([...c.ancestors.map((a) => slugOf.get(String(a)) ?? ''), c.slug].join('/'), c);
+  return (value: string) => {
+    const raw = value.trim().toLowerCase();
+    const prefix = raw.match(/^(pyqs?|test-?series|ts):/)?.[1];
+    const body = raw.replace(/^(pyqs?|test-?series|ts):/, '');
+    const path = body.split(/\s*[/>›]\s*/).filter(Boolean).map((p) => slugify(p)).join('/');
+    if (prefix) return map.get(`${prefix.startsWith('pyq') ? 'pyqs' : 'test-series'}:${path}`) ?? null;
+    return map.get(path) ?? null;
+  };
+}
+
+function rowToQuestion(row: RawRow, defaults: Defaults, findCategory: (v: string) => string | null) {
+  const categoryCell = pick(row, 'category', 'categories', 'categorypath');
+  const categoryIds = categoryCell
+    ? categoryCell.split(/[|;]/).map((c) => c.trim()).filter(Boolean).map((c) => findCategory(c) ?? `invalid:${c}`)
+    : defaults.categoryId ? [String(defaults.categoryId)] : [];
   const options = OPTION_KEYS.map((key) => ({
     key,
     text: pick(row, `option${key.toLowerCase()}`, key.toLowerCase(), `opt${key.toLowerCase()}`),
@@ -149,6 +193,8 @@ function rowToQuestion(row: RawRow, defaults: Defaults) {
     : [];
 
   const yearRaw = pick(row, 'sourceyear', 'year');
+  // Several image links can be given in one cell, separated by | , ; or new lines.
+  const links = (v: string) => v.split(/[|,;\s]+/).map((x) => x.trim()).filter(Boolean).slice(0, 10);
   const tagsRaw = pick(row, 'tags');
 
   return {
@@ -161,10 +207,13 @@ function rowToQuestion(row: RawRow, defaults: Defaults) {
     difficulty: (pick(row, 'difficulty') || 'medium').toLowerCase(),
     language: (pick(row, 'language', 'lang') || defaults.language).toLowerCase(),
     translations,
-    imageUrl: '',
+    imageUrl: pick(row, 'imageurl', 'image'),
+    images: links(pick(row, 'images', 'questionimages')),
+    explanationImages: links(pick(row, 'explanationimages', 'solutionimages')),
     sourceExam: pick(row, 'sourceexam', 'exam') || defaults.sourceExam,
     sourceYear: yearRaw ? Number(yearRaw) : defaults.sourceYear,
     tags: tagsRaw ? tagsRaw.split(/[;,]/).map((t) => t.trim()).filter(Boolean).slice(0, 20) : [],
+    categoryIds,
     isActive: true,
   };
 }
@@ -179,11 +228,16 @@ export async function createImportJob(params: {
   const lower = params.fileName.toLowerCase();
   const fileType: 'csv' | 'xlsx' = lower.endsWith('.xlsx') ? 'xlsx' : 'csv';
 
-  if (params.targetTestId && !(await TestModel.exists({ _id: params.targetTestId }))) {
-    throw ApiError.validation([{ path: 'body.targetTestId', message: 'Target test not found' }]);
+  if (params.targetTestId) {
+    const target = await TestModel.findById(params.targetTestId, { autoCategoryId: 1 }).lean();
+    if (!target) throw ApiError.validation([{ path: 'body.targetTestId', message: 'Target test not found' }]);
+    if (target.autoCategoryId) {
+      throw ApiError.validation([{ path: 'body.targetTestId', message: 'Automatic practice sets fill themselves - import into the category instead' }]);
+    }
   }
 
   const rows = await readRows(params.buffer, fileType);
+  const findCategory = await categoryLookup();
   if (!rows.length) throw ApiError.badRequest('The file does not contain any question rows');
   if (rows.length > MAX_IMPORT_ROWS) throw ApiError.badRequest(`A single import can contain at most ${MAX_IMPORT_ROWS} rows`);
   if (!('questiontext' in rows[0]!) && !('question' in rows[0]!)) {
@@ -196,7 +250,12 @@ export async function createImportJob(params: {
 
   rows.forEach((raw, index) => {
     const rowNumber = index + 2; // header is row 1
-    const candidate = rowToQuestion(raw, params.defaults);
+    const candidate = rowToQuestion(raw, params.defaults, findCategory);
+    const badCategory = candidate.categoryIds.find((c) => c.startsWith('invalid:'));
+    if (badCategory) {
+      rowErrors.push({ row: rowNumber, field: 'category', message: `Category "${badCategory.slice(8)}" was not found. Use a path like defence/cds/maths or pyqs:nda/maths` });
+      return;
+    }
     const parsed = createQuestionSchema.safeParse(candidate);
     if (!parsed.success) {
       for (const issue of parsed.error.issues.slice(0, 5)) {
@@ -214,8 +273,19 @@ export async function createImportJob(params: {
   const existingHashes = new Set(existing.map((e) => e.contentHash));
   for (const v of valid) if (existingHashes.has(v.contentHash)) v.duplicate = true;
 
+  // Where the questions will appear (shown before committing).
+  const labels = await categoryLabels(valid.flatMap((v) => v.categoryIds));
+  const perCategory = new Map<string, number>();
+  for (const v of valid) for (const id of v.categoryIds) perCategory.set(id, (perCategory.get(id) ?? 0) + 1);
+  const destinations = [...perCategory.entries()]
+    .map(([id, count]) => ({ categoryId: id, label: labels.get(id)?.label ?? 'Unknown', moduleType: labels.get(id)?.moduleType ?? '', count }))
+    .sort((a, b) => b.count - a.count);
+  const uncategorizedRows = valid.filter((v) => !v.categoryIds.length).length;
+
   const invalidRowNumbers = new Set(rowErrors.map((e) => e.row));
   const job = await ImportJobModel.create({
+    destinations,
+    uncategorizedRows,
     fileName: params.fileName.slice(0, 255),
     fileType,
     status: 'validated',
@@ -233,7 +303,15 @@ export async function createImportJob(params: {
   return {
     ...job.toObject(),
     payload: undefined,
-    preview: valid.slice(0, 10).map((v) => ({ row: v.row, questionText: v.questionText, options: v.options, correctOption: v.correctOption, subject: v.subject, duplicate: v.duplicate })),
+    preview: valid.slice(0, 10).map((v) => ({
+      row: v.row,
+      questionText: v.questionText,
+      options: v.options,
+      correctOption: v.correctOption,
+      subject: v.subject,
+      duplicate: v.duplicate,
+      categories: v.categoryIds.map((id) => labels.get(id)?.label ?? 'Unknown'),
+    })),
   };
 }
 
@@ -252,15 +330,45 @@ export async function commitImportJob(jobId: string, skipDuplicates: boolean, us
 
     type Payload = ReturnType<typeof rowToQuestion> & { contentHash: string; duplicate: boolean; row: number };
     const rows = (job.payload as Payload[]).filter((p) => !(skipDuplicates && p.duplicate));
-    const docs = rows.map(({ duplicate: _d, row: _r, ...q }) => ({ ...q, createdBy: userId, updatedBy: userId }));
+    const docs = [];
+    for (const { duplicate: _d, row: _r, ...q } of rows) {
+      const links = await resolveCategoryLinks((q as { categoryIds?: string[] }).categoryIds ?? []);
+      docs.push({ ...q, ...links, createdBy: userId, updatedBy: userId });
+    }
     const created = docs.length ? await QuestionModel.insertMany(docs, { session }) : [];
     const ids = created.map((c) => c._id as Types.ObjectId);
 
-    if (job.targetTestId && ids.length) {
+    // Rows skipped as duplicates still have to reach their destination: the question that already exists
+    // is filed under the row's categories too (and goes into the target test).
+    const skippedRows = (job.payload as Payload[]).filter((p) => skipDuplicates && p.duplicate);
+    const existingDocs = skippedRows.length
+      ? await QuestionModel.find({ contentHash: { $in: skippedRows.map((p) => p.contentHash) } }, { _id: 1, contentHash: 1, categoryIds: 1 })
+          .sort({ createdAt: 1 })
+          .session(session ?? null)
+          .lean()
+      : [];
+    const existingByHash = new Map<string, (typeof existingDocs)[number]>();
+    for (const e of existingDocs) if (!existingByHash.has(e.contentHash ?? '')) existingByHash.set(e.contentHash ?? '', e);
+    const linkedIds: Types.ObjectId[] = [];
+    for (const p of skippedRows) {
+      const existing = existingByHash.get(p.contentHash);
+      if (!existing) continue;
+      linkedIds.push(existing._id);
+      const add = ((p as { categoryIds?: string[] }).categoryIds ?? []).filter((c) => !(existing.categoryIds ?? []).map(String).includes(c));
+      if (add.length) {
+        const links = await resolveCategoryLinks([...(existing.categoryIds ?? []).map(String), ...add]);
+        await QuestionModel.updateOne({ _id: existing._id }, { $set: links }, { session });
+        existing.categoryIds = links.categoryIds;
+      }
+    }
+
+    if (job.targetTestId) {
       const test = await TestModel.findById(job.targetTestId).session(session ?? null);
       if (test) {
-        if (test.questionIds.length + ids.length > 500) throw ApiError.badRequest('The target test would exceed 500 questions');
-        test.questionIds.push(...ids);
+        const inTest = new Set(test.questionIds.map(String));
+        const toAdd = [...ids, ...linkedIds].filter((id) => !inTest.has(String(id)) && (inTest.add(String(id)), true));
+        if (test.questionIds.length + toAdd.length > 500) throw ApiError.badRequest('The target test would exceed 500 questions');
+        test.questionIds.push(...toAdd);
         await test.save({ session });
       }
     }
@@ -269,7 +377,13 @@ export async function commitImportJob(jobId: string, skipDuplicates: boolean, us
     job.createdQuestionIds = ids;
     job.payload = [];
     await job.save({ session });
-    return { importedCount: ids.length, skipped: (job.validRows ?? 0) - ids.length, targetTestId: job.targetTestId };
+    return {
+      importedCount: ids.length,
+      skipped: (job.validRows ?? 0) - ids.length,
+      linkedExisting: [...new Set(linkedIds.map(String))].length,
+      targetTestId: job.targetTestId,
+      questionIds: [...ids, ...linkedIds],
+    };
   });
 }
 

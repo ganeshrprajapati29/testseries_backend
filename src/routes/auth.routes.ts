@@ -5,6 +5,7 @@ import { authLimiter, passwordResetLimiter } from '../middleware/rateLimiter.js'
 import { validate } from '../middleware/validate.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import {
+  changeEmailSchema,
   changePasswordSchema,
   forgotPasswordSchema,
   loginSchema,
@@ -23,6 +24,7 @@ router.post('/logout', optionalAuth, asyncHandler(c.logout));
 router.post('/logout-all', authenticate, asyncHandler(c.logoutAll));
 router.post('/forgot-password', passwordResetLimiter, validate({ body: forgotPasswordSchema }), asyncHandler(c.forgotPassword));
 router.post('/reset-password', authLimiter, validate({ body: resetPasswordSchema }), asyncHandler(c.resetPassword));
+router.post('/change-email', authenticate, authLimiter, validate({ body: changeEmailSchema }), asyncHandler(c.changeEmail));
 router.post('/change-password', authenticate, authLimiter, validate({ body: changePasswordSchema }), asyncHandler(c.changePassword));
 
 export default router;

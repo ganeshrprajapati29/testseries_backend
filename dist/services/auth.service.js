@@ -44,16 +44,27 @@ async function createSession(user, scope, meta) {
     });
     return { token, ttl };
 }
+/** Throws when another account already uses this mobile number. */
+export async function assertMobileFree(mobile, exceptUserId) {
+    if (!mobile)
+        return;
+    const filter = { mobile };
+    if (exceptUserId)
+        filter._id = { $ne: exceptUserId };
+    if (await UserModel.exists(filter))
+        throw ApiError.conflict('An account with this mobile number already exists', 'MOBILE_TAKEN');
+}
 export async function registerStudent(input, meta) {
     const normalizedEmail = normalizeEmail(input.email);
     const exists = await UserModel.exists({ normalizedEmail });
     if (exists)
         throw ApiError.conflict('An account with this email already exists', 'EMAIL_TAKEN');
+    await assertMobileFree(input.mobile);
     const user = await UserModel.create({
         name: input.name,
         email: input.email.trim(),
         normalizedEmail,
-        mobile: input.mobile || undefined,
+        mobile: input.mobile,
         passwordHash: await hashPassword(input.password),
         role: 'student', // public registration can never create admins
         lastLoginAt: new Date(),
@@ -171,6 +182,7 @@ export async function changePassword(userId, currentSessionId, currentPassword, 
     await revokeAllSessions(userId, currentSessionId);
 }
 export async function updateProfile(userId, input) {
+    await assertMobileFree(input.mobile, userId);
     const user = await UserModel.findByIdAndUpdate(userId, { $set: input }, { new: true, runValidators: true });
     if (!user)
         throw ApiError.notFound('User not found');

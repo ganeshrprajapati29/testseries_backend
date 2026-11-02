@@ -4,6 +4,8 @@ import { CategoryModel } from '../models/Category.model.js';
 import { TestModel } from '../models/Test.model.js';
 import { TestSeriesModel } from '../models/TestSeries.model.js';
 import { ApiError } from '../utils/ApiError.js';
+import { QuestionModel } from '../models/Question.model.js';
+import { questionCountsByCategory, recomputeQuestionPaths } from './questionCategory.service.js';
 import { slugify } from '../utils/slugify.js';
 export const MAX_CATEGORY_DEPTH = 4;
 export function buildTree(categories) {
@@ -19,6 +21,7 @@ export function buildTree(categories) {
             depth: c.depth,
             description: c.description ?? '',
             icon: c.icon ?? '',
+            imageUrl: c.imageUrl ?? '',
             sortOrder: c.sortOrder ?? 0,
             isActive: c.isActive ?? true,
             status: c.status ?? 'active',
@@ -61,6 +64,7 @@ export async function getAdminTree(moduleType, includeArchived = false) {
             { $group: { _id: '$categoryId', count: { $sum: 1 } } },
         ]),
     ]);
+    const { counts: qMap } = await questionCountsByCategory();
     const sMap = new Map(seriesCounts.map((s) => [String(s._id), s.count]));
     const tMap = new Map(testCounts.map((s) => [String(s._id), s.count]));
     const tree = buildTree(categories);
@@ -68,6 +72,7 @@ export async function getAdminTree(moduleType, includeArchived = false) {
         for (const n of nodes) {
             n.seriesCount = sMap.get(n._id) ?? 0;
             n.testCount = tMap.get(n._id) ?? 0;
+            n.questionCount = qMap.get(n._id) ?? 0;
             decorate(n.children);
         }
     };
@@ -227,6 +232,8 @@ export async function updateCategory(id, input) {
         await category.save({ session });
         if (parentChanged)
             await rebuildSubtree(category, session);
+        if (parentChanged)
+            await recomputeQuestionPaths({ categoryPaths: category._id });
         return category;
     });
 }
@@ -290,6 +297,8 @@ export async function deleteCategory(id) {
     if (children || series || tests) {
         throw ApiError.conflict('Only empty categories without sub-categories, series or tests can be deleted. Archive it instead.', 'CATEGORY_IN_USE');
     }
+    // Unlink questions from this category (the questions themselves are kept).
+    await QuestionModel.updateMany({ categoryIds: category._id }, { $pull: { categoryIds: category._id, categoryPaths: category._id } });
     await category.deleteOne();
 }
 export async function categoryPathFor(categoryId) {

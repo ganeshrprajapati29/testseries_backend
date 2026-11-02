@@ -1,12 +1,28 @@
 import { Schema, model, type InferSchemaType, type HydratedDocument } from 'mongoose';
 import { LANGUAGES, MODULE_TYPES, PUBLICATION_STATUSES, RESULT_VISIBILITY, TEST_TYPES } from '../types/enums.js';
 
+const pdfSchema = new Schema(
+  {
+    key: { type: String, required: true, maxlength: 300 },
+    fileName: { type: String, required: true, maxlength: 160 },
+    size: { type: Number, required: true, min: 0 },
+    uploadedAt: { type: Date, default: Date.now },
+  },
+  { _id: false },
+);
+
 const testSchema = new Schema(
   {
     title: { type: String, required: true, trim: true, minlength: 3, maxlength: 200 },
     slug: { type: String, required: true, lowercase: true, trim: true, maxlength: 120 },
     description: { type: String, trim: true, maxlength: 5000, default: '' },
     instructions: { type: String, trim: true, maxlength: 10000, default: '' },
+    /** Hindi version of the title / description / instructions (typed or machine translated). */
+    hi: {
+      title: { type: String, trim: true, maxlength: 400, default: '' },
+      description: { type: String, trim: true, maxlength: 8000, default: '' },
+      instructions: { type: String, trim: true, maxlength: 15000, default: '' },
+    },
     moduleType: { type: String, enum: MODULE_TYPES, default: 'TEST_SERIES', required: true },
     /** Optional: PYQ papers may live directly under a subject category without a series. */
     seriesId: { type: Schema.Types.ObjectId, ref: 'TestSeries', default: null },
@@ -30,9 +46,18 @@ const testSchema = new Schema(
     randomizeQuestions: { type: Boolean, default: false },
     randomizeOptions: { type: Boolean, default: false },
     resultVisibility: { type: String, enum: RESULT_VISIBILITY, default: 'IMMEDIATE' },
+    /** Optional PDFs, stored privately and streamed only after an access check. */
+    questionPaperPdf: { type: pdfSchema, default: null },
+    solutionPdf: { type: pdfSchema, default: null },
     sortOrder: { type: Number, default: 0 },
     publicationStatus: { type: String, enum: PUBLICATION_STATUSES, default: 'draft' },
     publishedAt: { type: Date, default: null },
+    /**
+     * Auto practice set: holds the Question Bank questions of this category that are not in any published
+     * test yet, so every categorised question reaches the website. Kept in sync automatically.
+     */
+    autoCategoryId: { type: Schema.Types.ObjectId, ref: 'Category', default: null },
+    autoPart: { type: Number, default: null },
     createdBy: { type: Schema.Types.ObjectId, ref: 'User' },
     updatedBy: { type: Schema.Types.ObjectId, ref: 'User' },
   },
@@ -47,6 +72,7 @@ testSchema.index({ slug: 1 }, { unique: true });
 testSchema.index({ seriesId: 1, sortOrder: 1 });
 testSchema.index({ moduleType: 1, publicationStatus: 1, categoryPath: 1, paperYear: -1 });
 testSchema.index({ title: 'text' });
+testSchema.index({ autoCategoryId: 1, autoPart: 1 }, { partialFilterExpression: { autoCategoryId: { $type: 'objectId' } } });
 
 export type Test = InferSchemaType<typeof testSchema>;
 export type TestDocument = HydratedDocument<Test>;

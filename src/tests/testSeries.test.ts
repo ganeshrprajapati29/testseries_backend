@@ -31,8 +31,12 @@ describe('test series & tests (admin)', () => {
     expect(list.body.data[0].testCount).toBe(1);
 
     const detail = await anon.get(`/api/test-series/${series.body.data.slug}`);
-    expect(detail.body.data.tests[0].questionCount).toBe(3);
-    expect(JSON.stringify(detail.body.data)).not.toContain('correctOption');
+    expect(detail.body.data.totalTests).toBe(1);
+    expect(detail.body.data.typeCounts).toEqual({ FULL_LENGTH: 1 });
+    const tests = await anon.get(`/api/test-series/${series.body.data.slug}/tests?page=1&limit=10`);
+    expect(tests.body.data[0].questionCount).toBe(3);
+    expect(tests.body.meta.total).toBe(1);
+    expect(JSON.stringify(tests.body.data)).not.toContain('correctOption');
   });
 
   it('treats null/empty availability dates as "no schedule"', async () => {

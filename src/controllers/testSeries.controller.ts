@@ -1,16 +1,25 @@
 import type { Request, Response } from 'express';
 import * as seriesService from '../services/testSeries.service.js';
 import { audit } from '../services/audit.service.js';
+import { cached, keyFrom } from '../services/cache.service.js';
 import { created, ok, paginated } from '../utils/ApiResponse.js';
 
 // ---------- public
 export async function list(req: Request, res: Response) {
-  const { items, meta } = await seriesService.publicListSeries(req.query as never, req.auth?.user.id);
+  // Anonymous listings are identical for everyone and can be cached; signed-in users see enrolment flags.
+  const studentId = req.auth?.user.id;
+  const load = () => seriesService.publicListSeries(req.query as never, studentId);
+  const { items, meta } = studentId ? await load() : await cached('catalog', keyFrom('series:list', req.query as Record<string, unknown>), 120, load);
   return paginated(res, items, meta);
 }
 
 export async function detail(req: Request, res: Response) {
   return ok(res, await seriesService.publicSeriesDetail(String(req.params.slug), req.auth?.user.id));
+}
+
+export async function tests(req: Request, res: Response) {
+  const { items, meta } = await seriesService.publicSeriesTests(String(req.params.slug), req.auth?.user.id, req.query as never);
+  return paginated(res, items, meta);
 }
 
 export async function enroll(req: Request, res: Response) {
@@ -19,7 +28,7 @@ export async function enroll(req: Request, res: Response) {
 }
 
 export async function home(_req: Request, res: Response) {
-  return ok(res, await seriesService.featuredAndStats());
+  return ok(res, await cached('catalog', 'series:home', 120, () => seriesService.featuredAndStats()));
 }
 
 // ---------- admin
@@ -35,13 +44,13 @@ export async function adminGet(req: Request, res: Response) {
 export async function create(req: Request, res: Response) {
   const series = await seriesService.createSeries(req.body, req.auth!.user._id);
   await audit(req, { action: 'series.create', entityType: 'TestSeries', entityId: series.id, summary: `Created "${series.title}"` });
-  return created(res, series);
+  return created(res, series, (series.$locals.translationWarning as string | undefined) ?? 'Test series created');
 }
 
 export async function update(req: Request, res: Response) {
   const series = await seriesService.updateSeries(String(req.params.id), req.body, req.auth!.user._id);
   await audit(req, { action: 'series.update', entityType: 'TestSeries', entityId: series.id, summary: `Updated "${series.title}"` });
-  return ok(res, series, 'Test series updated');
+  return ok(res, series, (series.$locals.translationWarning as string | undefined) ?? 'Test series updated');
 }
 
 export async function setPublication(req: Request, res: Response) {

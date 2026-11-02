@@ -41,9 +41,13 @@ export async function client(): Promise<Client> {
   return c;
 }
 
+let mobileSeq = 0;
+/** A fresh valid Indian mobile number for every registered test student. */
+export const nextMobile = () => String(9000000000 + ++mobileSeq);
+
 export async function studentClient(email = 'student@example.com', password = 'Passw0rd1') {
   const c = await client();
-  const res = await c.post('/api/auth/register', { name: 'Student One', email, password });
+  const res = await c.post('/api/auth/register', { name: 'Student One', email, mobile: nextMobile(), password });
   if (res.status !== 201) throw new Error(`register failed: ${res.status} ${JSON.stringify(res.body)}`);
   await c.refreshCsrf();
   return { c, user: res.body.data.user };

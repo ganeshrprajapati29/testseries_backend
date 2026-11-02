@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 300" width="400" height="300" font-family="Arial, Helvetica, sans-serif"><rect width="400" height="300" fill="#ffffff"/><text x="360" y="30" font-size="14" text-anchor="middle" fill="#475569">N</text><line x1="360" y1="36" x2="360" y2="70" stroke="#475569" stroke-width="2"/><polygon points="360,34 355,44 365,44" fill="#475569"/>
+     <circle cx="80" cy="250" r="5" fill="#1e6fd0"/><text x="70" y="272" font-size="14" fill="#0f172a">Start</text>
+     <line x1="80" y1="250" x2="80" y2="160" stroke="#1e6fd0" stroke-width="3"/>
+     <text x="28" y="205" font-size="14" fill="#0f172a">5 km</text>
+     <line x1="80" y1="160" x2="296" y2="160" stroke="#1e6fd0" stroke-width="3"/>
+     <text x="173" y="152" font-size="14" fill="#0f172a">12 km</text>
+     <circle cx="296" cy="160" r="5" fill="#f26b1d"/><text x="304" y="165" font-size="14" fill="#0f172a">End</text>
+     <line x1="80" y1="250" x2="296" y2="160" stroke="#f26b1d" stroke-width="2" stroke-dasharray="6 5"/></svg>

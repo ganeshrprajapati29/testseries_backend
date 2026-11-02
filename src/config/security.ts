@@ -22,23 +22,35 @@ export const helmetMiddleware = helmet({
   crossOriginResourcePolicy: { policy: 'same-site' },
 });
 
-export function sessionCookieOptions(maxAgeMs: number) {
+/**
+ * Cookie domain for the host that served the request. COOKIE_DOMAIN may list parent domains
+ * (`civilsansad.com,example.org`); a request to `testapi.civilsansad.com` then sets cookies for
+ * `civilsansad.com`, so a frontend on `test.civilsansad.com` can read the CSRF cookie. Any other
+ * host (e.g. test.ganpura.in) gets host-only cookies.
+ */
+export function cookieDomainFor(host?: string) {
+  if (!host) return undefined;
+  const h = host.toLowerCase();
+  return env.cookieDomains.find((d) => h === d || h.endsWith(`.${d}`));
+}
+
+export function sessionCookieOptions(maxAgeMs: number, host?: string) {
   return {
     httpOnly: true,
     secure: env.COOKIE_SECURE,
     sameSite: 'lax' as const,
-    domain: env.COOKIE_DOMAIN,
+    domain: cookieDomainFor(host),
     path: '/',
     maxAge: maxAgeMs,
   };
 }
 
-export function csrfCookieOptions() {
+export function csrfCookieOptions(host?: string) {
   return {
     httpOnly: false, // must be readable by the SPA so it can echo the value in the header
     secure: env.COOKIE_SECURE,
     sameSite: 'strict' as const,
-    domain: env.COOKIE_DOMAIN,
+    domain: cookieDomainFor(host),
     path: '/',
   };
 }

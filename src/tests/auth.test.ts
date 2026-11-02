@@ -8,7 +8,7 @@ import { adminClient, client, studentClient } from './helpers.js';
 describe('authentication', () => {
   it('registers a student with a hashed password and an HttpOnly session cookie', async () => {
     const c = await client();
-    const res = await c.post('/api/auth/register', { name: 'Asha', email: 'Asha@Example.com', password: 'Passw0rd1' });
+    const res = await c.post('/api/auth/register', { name: 'Asha', email: 'Asha@Example.com', mobile: '+91 9876543210', password: 'Passw0rd1' });
     expect(res.status).toBe(201);
     expect(res.body.data.user.role).toBe('student');
     expect(res.body.data.user).not.toHaveProperty('passwordHash');
@@ -21,7 +21,7 @@ describe('authentication', () => {
 
   it('ignores a role sent by the client during registration', async () => {
     const c = await client();
-    const res = await c.post('/api/auth/register', { name: 'Hacker', email: 'h@example.com', password: 'Passw0rd1', role: 'superadmin' });
+    const res = await c.post('/api/auth/register', { name: 'Hacker', email: 'h@example.com', mobile: '9876500001', password: 'Passw0rd1', role: 'superadmin' });
     expect(res.status).toBe(201);
     expect(res.body.data.user.role).toBe('student');
   });
@@ -29,10 +29,26 @@ describe('authentication', () => {
   it('rejects duplicate emails and weak passwords', async () => {
     await studentClient('dup@example.com');
     const c = await client();
-    expect((await c.post('/api/auth/register', { name: 'Dup', email: 'DUP@example.com', password: 'Passw0rd1' })).status).toBe(409);
-    const weak = await c.post('/api/auth/register', { name: 'Weak', email: 'weak@example.com', password: 'short' });
+    expect((await c.post('/api/auth/register', { name: 'Dup', email: 'DUP@example.com', mobile: '9876500002', password: 'Passw0rd1' })).status).toBe(409);
+    const weak = await c.post('/api/auth/register', { name: 'Weak', email: 'weak@example.com', mobile: '9876500003', password: 'short' });
     expect(weak.status).toBe(422);
     expect(weak.body.error.code).toBe('VALIDATION_ERROR');
+  });
+
+  it('requires a valid, unused mobile number', async () => {
+    const c = await client();
+    const missing = await c.post('/api/auth/register', { name: 'No Mobile', email: 'nomobile@example.com', password: 'Passw0rd1' });
+    expect(missing.status).toBe(422);
+    expect(JSON.stringify(missing.body.error)).toContain('mobile');
+    const bad = await c.post('/api/auth/register', { name: 'Bad Mobile', email: 'badmobile@example.com', mobile: '12345', password: 'Passw0rd1' });
+    expect(bad.status).toBe(422);
+    const ok = await c.post('/api/auth/register', { name: 'Has Mobile', email: 'mobile1@example.com', mobile: '+91 9123456789', password: 'Passw0rd1' });
+    expect(ok.status).toBe(201);
+    expect(ok.body.data.user.mobile).toBe('9123456789');
+    const c2 = await client();
+    const dup = await c2.post('/api/auth/register', { name: 'Same Mobile', email: 'mobile2@example.com', mobile: '9123456789', password: 'Passw0rd1' });
+    expect(dup.status).toBe(409);
+    expect(dup.body.error.code).toBe('MOBILE_TAKEN');
   });
 
   it('requires a CSRF token for state-changing requests', async () => {

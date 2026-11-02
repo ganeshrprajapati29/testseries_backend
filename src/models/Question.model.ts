@@ -38,6 +38,14 @@ const questionSchema = new Schema(
     language: { type: String, enum: LANGUAGES, default: 'en' },
     translations: { type: [translationSchema], default: [] },
     imageUrl: { type: String, trim: true, maxlength: 1000, default: '' },
+    /** Additional figures shown with the question (imageUrl is always shown first). */
+    images: { type: [{ type: String, trim: true, maxlength: 1000 }], default: [] },
+    /** Figures shown with the explanation in solutions. */
+    explanationImages: { type: [{ type: String, trim: true, maxlength: 1000 }], default: [] },
+    /** Categories / sub-categories this question belongs to (both Test Series and PYQ trees). */
+    categoryIds: [{ type: Schema.Types.ObjectId, ref: 'Category' }],
+    /** The categories above plus all their ancestors - lets a parent category list every question below it. */
+    categoryPaths: [{ type: Schema.Types.ObjectId, ref: 'Category' }],
     sourceExam: { type: String, trim: true, maxlength: 120, default: '' },
     sourceYear: { type: Number, min: 1950, max: 2100, default: null },
     tags: [{ type: String, trim: true, maxlength: 60 }],
@@ -56,6 +64,7 @@ questionSchema.path('correctOption').validate(function (this: { options: { key: 
 }, 'correctOption must match one of the option keys');
 
 questionSchema.index({ subject: 1, topic: 1, isActive: 1 });
+questionSchema.index({ categoryPaths: 1, isActive: 1, createdAt: -1 });
 questionSchema.index({ sourceExam: 1, sourceYear: -1 });
 questionSchema.index({ questionText: 'text', topic: 'text', subject: 'text' });
 

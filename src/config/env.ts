@@ -15,6 +15,9 @@ const schema = z.object({
   MONGODB_URI: z.string().min(1).default('mongodb://127.0.0.1:27017/civil_sansad'),
   MONGODB_TEST_URI: z.string().default('mongodb://127.0.0.1:27017/civil_sansad_test'),
 
+  REDIS_URL: z.string().optional().default(''),
+  REDIS_PREFIX: z.string().default('cs:'),
+
   SESSION_SECRET: z.string().min(32, 'SESSION_SECRET must be at least 32 characters'),
   SESSION_TTL_HOURS: z.coerce.number().positive().default(168),
   ADMIN_SESSION_TTL_HOURS: z.coerce.number().positive().default(12),
@@ -31,6 +34,8 @@ const schema = z.object({
   STORAGE_DRIVER: z.enum(['local', 's3']).default('local'),
   UPLOAD_DIR: z.string().default('uploads'),
   PUBLIC_UPLOAD_BASE_URL: z.string().default('/uploads'),
+  /** Files that must only be downloaded through the API (question paper PDFs). Never serve this folder directly. */
+  PRIVATE_UPLOAD_DIR: z.string().default('storage/private'),
   S3_BUCKET: z.string().optional().default(''),
   S3_REGION: z.string().optional().default(''),
   S3_ENDPOINT: z.string().optional().default(''),
@@ -42,6 +47,15 @@ const schema = z.object({
   RAZORPAY_KEY_ID: z.string().optional().default(''),
   RAZORPAY_KEY_SECRET: z.string().optional().default(''),
   RAZORPAY_WEBHOOK_SECRET: z.string().optional().default(''),
+
+  // English -> Hindi auto translation for questions, tests and series.
+  //   google-free : public Google Translate endpoint, no key (default; fine for admin-only, low volume use)
+  //   google      : Google Cloud Translation v2, needs TRANSLATE_API_KEY
+  //   libre       : LibreTranslate server at TRANSLATE_API_URL (TRANSLATE_API_KEY optional)
+  //   none        : disabled
+  TRANSLATE_PROVIDER: z.enum(['google-free', 'google', 'libre', 'none']).default('google-free'),
+  TRANSLATE_API_KEY: z.string().optional().default(''),
+  TRANSLATE_API_URL: z.string().optional().default(''),
 
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
 });
@@ -76,6 +90,7 @@ export const env = {
   isProd: data.NODE_ENV === 'production',
   isTest: data.NODE_ENV === 'test',
   corsOrigins: data.CORS_ORIGINS.split(',').map((o) => o.trim()).filter(Boolean),
+  cookieDomains: (data.COOKIE_DOMAIN ?? '').split(',').map((d) => d.trim().toLowerCase().replace(/^\./, '')).filter(Boolean),
   paymentsConfigured: data.PAYMENTS_ENABLED && !!data.RAZORPAY_KEY_ID && !!data.RAZORPAY_KEY_SECRET,
 };
 

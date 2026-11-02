@@ -12,6 +12,7 @@ const categorySchema = new Schema(
     depth: { type: Number, required: true, min: 0, max: 5, default: 0 },
     description: { type: String, trim: true, maxlength: 2000, default: '' },
     icon: { type: String, trim: true, maxlength: 60, default: '' },
+    imageUrl: { type: String, trim: true, maxlength: 1000, default: '' },
     sortOrder: { type: Number, default: 0 },
     isActive: { type: Boolean, default: true },
     status: { type: String, enum: CATEGORY_STATUSES, default: 'active' },

@@ -9,7 +9,9 @@ import { ApiError } from '../utils/ApiError.js';
 import { buildMeta, escapeRegex, pageParams } from '../utils/pagination.js';
 import { uniqueSlug } from '../utils/slugify.js';
 import { activeEnrollment, grantEnrollment, hasSeriesAccess } from './access.service.js';
+import { fillHindiContent } from './translate.service.js';
 import { categoryPathFor } from './category.service.js';
+import { categoryLabels } from './questionCategory.service.js';
 const slugExists = (slug) => TestSeriesModel.exists({ slug }).then(Boolean);
 function publishedWindowFilter(now = new Date()) {
     return {
@@ -52,8 +54,10 @@ export async function adminListSeries(q) {
     ]);
     const tc = new Map(testCounts.map((c) => [String(c._id), c.count]));
     const ec = new Map(enrollCounts.map((c) => [String(c._id), c.count]));
+    const catId = (i) => String(i.categoryId?._id ?? i.categoryId);
+    const labels = await categoryLabels(items.map(catId));
     return {
-        items: items.map((i) => ({ ...i, testCount: tc.get(String(i._id)) ?? 0, enrollmentCount: ec.get(String(i._id)) ?? 0 })),
+        items: items.map((i) => ({ ...i, testCount: tc.get(String(i._id)) ?? 0, enrollmentCount: ec.get(String(i._id)) ?? 0, categoryLabel: labels.get(catId(i))?.label ?? '' })),
         meta: buildMeta(page, limit, total),
     };
 }
@@ -70,7 +74,13 @@ export async function adminGetSeries(id) {
         { $project: { n: { $size: '$questionIds' } } },
     ]);
     const qc = new Map(questionCounts.map((q) => [String(q._id), q.n]));
-    return { ...series, tests: tests.map((t) => ({ ...t, questionCount: qc.get(String(t._id)) ?? 0 })) };
+    const seriesCat = String(series.categoryId?._id ?? series.categoryId);
+    const labels = await categoryLabels([seriesCat, ...tests.map((t) => String(t.categoryId))]);
+    return {
+        ...series,
+        categoryLabel: labels.get(seriesCat)?.label ?? '',
+        tests: tests.map((t) => ({ ...t, questionCount: qc.get(String(t._id)) ?? 0, categoryLabel: labels.get(String(t.categoryId))?.label ?? '' })),
+    };
 }
 export async function createSeries(input, userId) {
     const { category, path } = await categoryPathFor(input.categoryId);
@@ -78,8 +88,9 @@ export async function createSeries(input, userId) {
         throw ApiError.validation([{ path: 'body.categoryId', message: 'Category belongs to a different module' }]);
     }
     const slug = await uniqueSlug(input.title, slugExists);
-    return TestSeriesModel.create({
-        ...input,
+    const { autoTranslate, ...data } = input;
+    const series = new TestSeriesModel({
+        ...data,
         price: input.accessType === 'paid' ? input.price : 0,
         slug,
         categoryPath: path,
@@ -87,6 +98,16 @@ export async function createSeries(input, userId) {
         createdBy: userId,
         updatedBy: userId,
     });
+    if (autoTranslate)
+        await autoHindi(series);
+    await series.save();
+    return series;
+}
+async function autoHindi(series) {
+    const current = (series.toObject().hi ?? {});
+    const { hi, warning } = await fillHindiContent({ title: series.title, description: series.description, highlights: [...(series.highlights ?? [])] }, current);
+    series.set('hi', hi);
+    series.$locals.translationWarning = warning;
 }
 export async function updateSeries(id, input, userId) {
     const series = await TestSeriesModel.findById(id);
@@ -104,7 +125,10 @@ export async function updateSeries(id, input, userId) {
     if (accessType === 'paid' && price <= 0) {
         throw ApiError.validation([{ path: 'body.price', message: 'Paid series must have a price greater than 0' }]);
     }
-    series.set({ ...input, price: accessType === 'paid' ? price : 0, updatedBy: userId });
+    const { autoTranslate, ...data } = input;
+    series.set({ ...data, price: accessType === 'paid' ? price : 0, updatedBy: userId });
+    if (autoTranslate)
+        await autoHindi(series);
     await series.save();
     return series;
 }
@@ -227,56 +251,23 @@ export async function publicListSeries(q, studentId) {
         meta: buildMeta(page, limit, total),
     };
 }
-export async function publicSeriesDetail(slug, studentId) {
+async function loadPublishedSeries(slug) {
     const series = await TestSeriesModel.findOne({ slug, ...publishedWindowFilter() })
         .select('-createdBy -updatedBy')
         .populate('categoryId', 'name slug')
         .lean();
     if (!series)
         throw ApiError.notFound('Test series not found');
-    const tests = await TestModel.aggregate([
+    return series;
+}
+export async function publicSeriesDetail(slug, studentId) {
+    const series = await loadPublishedSeries(slug);
+    const typeAgg = await TestModel.aggregate([
         { $match: { seriesId: series._id, publicationStatus: 'published' } },
-        { $sort: { sortOrder: 1, createdAt: 1 } },
-        {
-            $project: {
-                title: 1,
-                slug: 1,
-                description: 1,
-                testType: 1,
-                durationSeconds: 1,
-                marksPerCorrect: 1,
-                negativeMarks: 1,
-                totalMarks: 1,
-                maxAttempts: 1,
-                isFree: 1,
-                availableFrom: 1,
-                availableUntil: 1,
-                languageOptions: 1,
-                paperYear: 1,
-                questionCount: { $size: '$questionIds' },
-            },
-        },
+        { $group: { _id: '$testType', n: { $sum: 1 }, free: { $sum: { $cond: ['$isFree', 1, 0] } } } },
     ]);
     const hasAccess = studentId ? await hasSeriesAccess(studentId, series) : series.accessType === 'free';
     const enrollment = studentId ? await activeEnrollment(studentId, series._id) : null;
-    let attemptsByTest = new Map();
-    if (studentId) {
-        const attempts = await TestAttemptModel.find({ studentId, testId: { $in: tests.map((t) => t._id) } })
-            .select('testId status createdAt')
-            .sort({ createdAt: 1 })
-            .lean();
-        attemptsByTest = new Map();
-        for (const a of attempts) {
-            const key = String(a.testId);
-            const cur = attemptsByTest.get(key) ?? { attempts: 0, inProgressAttemptId: null, lastAttemptId: null };
-            cur.attempts += 1;
-            if (a.status === 'IN_PROGRESS')
-                cur.inProgressAttemptId = String(a._id);
-            else
-                cur.lastAttemptId = String(a._id);
-            attemptsByTest.set(key, cur);
-        }
-    }
     // Build breadcrumb from the category path.
     const chain = await CategoryModel.find({ _id: { $in: series.categoryPath } }).select('name slug depth').sort({ depth: 1 }).lean();
     let acc = '';
@@ -291,11 +282,61 @@ export async function publicSeriesDetail(slug, studentId) {
         hasAccess,
         isEnrolled: !!enrollment,
         enrollmentExpiresAt: enrollment?.expiresAt ?? null,
-        tests: tests.map((t) => ({
+        totalTests: typeAgg.reduce((a, t) => a + t.n, 0),
+        freeTestCount: typeAgg.reduce((a, t) => a + t.free, 0),
+        typeCounts: Object.fromEntries(typeAgg.map((t) => [t._id, t.n])),
+    };
+}
+/** Paginated tests of a series (filterable by test type) with the student's lock / attempt state. */
+export async function publicSeriesTests(slug, studentId, q) {
+    const series = await loadPublishedSeries(slug);
+    const { page, limit, skip } = pageParams(q.page, q.limit);
+    const match = { seriesId: series._id, publicationStatus: 'published' };
+    if (q.type)
+        match.testType = q.type;
+    const [tests, total] = await Promise.all([
+        TestModel.aggregate([
+            { $match: match },
+            { $sort: { sortOrder: 1, createdAt: 1 } },
+            { $skip: skip },
+            { $limit: limit },
+            {
+                $project: {
+                    title: 1, slug: 1, description: 1, 'hi.title': 1, testType: 1, durationSeconds: 1, marksPerCorrect: 1, negativeMarks: 1, totalMarks: 1,
+                    maxAttempts: 1, isFree: 1, availableFrom: 1, availableUntil: 1, languageOptions: 1, paperYear: 1,
+                    questionCount: { $size: '$questionIds' },
+                    hasQuestionPaperPdf: { $gt: ['$questionPaperPdf', null] },
+                    hasSolutionPdf: { $gt: ['$solutionPdf', null] },
+                },
+            },
+        ]),
+        TestModel.countDocuments(match),
+    ]);
+    const hasAccess = studentId ? await hasSeriesAccess(studentId, series) : series.accessType === 'free';
+    const attemptsByTest = new Map();
+    if (studentId) {
+        const attempts = await TestAttemptModel.find({ studentId, testId: { $in: tests.map((t) => t._id) } })
+            .select('testId status createdAt')
+            .sort({ createdAt: 1 })
+            .lean();
+        for (const a of attempts) {
+            const key = String(a.testId);
+            const cur = attemptsByTest.get(key) ?? { attempts: 0, inProgressAttemptId: null, lastAttemptId: null };
+            cur.attempts += 1;
+            if (a.status === 'IN_PROGRESS')
+                cur.inProgressAttemptId = String(a._id);
+            else
+                cur.lastAttemptId = String(a._id);
+            attemptsByTest.set(key, cur);
+        }
+    }
+    return {
+        items: tests.map((t) => ({
             ...t,
             locked: !hasAccess && !t.isFree,
             myAttempts: attemptsByTest.get(String(t._id)) ?? { attempts: 0, inProgressAttemptId: null, lastAttemptId: null },
         })),
+        meta: buildMeta(page, limit, total),
     };
 }
 /** Free series: adds the series to "My Tests". Paid series must go through payment. */
@@ -318,7 +359,7 @@ export async function featuredAndStats() {
         TestModel.countDocuments({ publicationStatus: 'published', moduleType: 'TEST_SERIES' }),
         TestModel.countDocuments({ publicationStatus: 'published', moduleType: 'PYQS' }),
         TestSeriesModel.find({ ...published, moduleType: 'TEST_SERIES' })
-            .select('title slug description coverImage accessType price mrp examName languageOptions isFeatured categoryId validityDays')
+            .select('title slug description hi.title coverImage accessType price mrp examName languageOptions isFeatured categoryId validityDays')
             .populate('categoryId', 'name slug')
             .sort({ isFeatured: -1, sortOrder: 1, publishedAt: -1 })
             .limit(6)

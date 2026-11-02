@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { CATEGORY_STATUSES, MODULE_TYPES } from '../types/enums.js';
-import { objectId, optionalObjectId } from './common.js';
+import { imageUrl, objectId, optionalObjectId } from './common.js';
 export const createCategorySchema = z.object({
     name: z.string().trim().min(1, 'Name is required').max(120),
     slug: z
@@ -14,6 +14,7 @@ export const createCategorySchema = z.object({
     parentId: optionalObjectId,
     description: z.string().trim().max(2000).default(''),
     icon: z.string().trim().max(60).default(''),
+    imageUrl: imageUrl,
     sortOrder: z.coerce.number().int().min(0).max(100000).optional(),
     isActive: z.boolean().default(true),
 });
@@ -29,6 +30,7 @@ export const updateCategorySchema = z.object({
     parentId: optionalObjectId,
     description: z.string().trim().max(2000).optional(),
     icon: z.string().trim().max(60).optional(),
+    imageUrl: imageUrl.optional(),
     sortOrder: z.coerce.number().int().min(0).max(100000).optional(),
     isActive: z.boolean().optional(),
 });

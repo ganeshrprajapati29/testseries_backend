@@ -20,6 +20,14 @@ const seriesBase = z.object({
   availableUntil: optionalDate,
   isFeatured: z.boolean().default(false),
   sortOrder: z.coerce.number().int().min(0).max(100000).default(0),
+  hi: z
+    .object({
+      title: z.string().trim().max(400).default(''),
+      description: z.string().trim().max(15000).default(''),
+      highlights: z.array(z.string().trim().min(1).max(400)).max(12).default([]),
+    })
+    .optional(),
+  autoTranslate: z.boolean().optional(),
 });
 
 function refineSeries<T extends z.ZodType<{ accessType?: string; price?: number; availableFrom?: Date | null; availableUntil?: Date | null }>>(schema: T) {

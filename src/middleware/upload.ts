@@ -3,13 +3,27 @@ import { ApiError } from '../utils/ApiError.js';
 
 const MB = 1024 * 1024;
 
-/** Files are kept in memory and handed to the storage service / parser - never executed. */
+/**
+ * Files are kept in memory and handed to the storage service, which verifies the real format
+ * from the file contents. The mimetype check here only rejects obvious mistakes early.
+ */
 export const imageUpload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 2 * MB, files: 1 },
+  limits: { fileSize: 8 * MB, files: 10 },
   fileFilter(_req, file, cb) {
-    if (!['image/png', 'image/jpeg', 'image/webp', 'image/gif'].includes(file.mimetype)) {
-      return cb(ApiError.badRequest('Only PNG, JPEG, WEBP or GIF images are allowed'));
+    if (!file.mimetype.startsWith('image/') && file.mimetype !== 'application/octet-stream') {
+      return cb(ApiError.badRequest('Only image files are allowed (JPG, PNG, WEBP, GIF, SVG, AVIF, TIFF)'));
+    }
+    cb(null, true);
+  },
+});
+
+export const pdfUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 25 * MB, files: 1 },
+  fileFilter(_req, file, cb) {
+    if (file.mimetype !== 'application/pdf' && !file.originalname.toLowerCase().endsWith('.pdf')) {
+      return cb(ApiError.badRequest('Only PDF files are allowed'));
     }
     cb(null, true);
   },

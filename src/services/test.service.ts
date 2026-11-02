@@ -1,15 +1,20 @@
 import { Types } from 'mongoose';
 import { CategoryModel } from '../models/Category.model.js';
 import { QuestionModel } from '../models/Question.model.js';
-import { TestModel, type TestDocument } from '../models/Test.model.js';
+import { TestModel, type Test, type TestDocument } from '../models/Test.model.js';
 import { TestAttemptModel } from '../models/TestAttempt.model.js';
 import { TestSeriesModel } from '../models/TestSeries.model.js';
 import type { ModuleType, PublicationStatus } from '../types/enums.js';
 import { ApiError } from '../utils/ApiError.js';
 import { buildMeta, escapeRegex, pageParams } from '../utils/pagination.js';
+import { toSolutionQuestion } from '../utils/safeQuestion.js';
 import { uniqueSlug } from '../utils/slugify.js';
 import { hasTestAccess } from './access.service.js';
+import { deletePrivateFile, openPrivateFile } from './storage.service.js';
+import { categoryLabels, tagQuestionsWithTestCategory } from './questionCategory.service.js';
+import { syncForQuestions } from './practiceSet.service.js';
 import { categoryPathFor } from './category.service.js';
+import { fillHindiContent, type HindiContent } from './translate.service.js';
 
 export interface TestInput {
   title: string;
@@ -33,6 +38,9 @@ export interface TestInput {
   randomizeOptions: boolean;
   resultVisibility: string;
   sortOrder: number;
+  hi?: HindiContent;
+  /** Machine-translate the empty Hindi title / description / instructions on save. */
+  autoTranslate?: boolean;
 }
 
 const testSlugExists = (slug: string) => TestModel.exists({ slug }).then(Boolean);
@@ -56,7 +64,7 @@ async function resolvePlacement(input: { seriesId?: string | null; categoryId?: 
 }
 
 function toDoc(input: Partial<TestInput>) {
-  const { durationMinutes, seriesId: _s, categoryId: _c, moduleType: _m, ...rest } = input;
+  const { durationMinutes, seriesId: _s, categoryId: _c, moduleType: _m, autoTranslate: _a, ...rest } = input;
   return { ...rest, ...(durationMinutes !== undefined ? { durationSeconds: Math.round(durationMinutes * 60) } : {}) };
 }
 
@@ -88,7 +96,11 @@ export async function adminListTests(q: { page: number; limit: number; search?: 
     { $group: { _id: '$testId', n: { $sum: 1 } } },
   ]);
   const ac = new Map(attemptCounts.map((a) => [String(a._id), a.n]));
-  return { items: items.map((i) => ({ ...i, attemptCount: ac.get(String(i._id)) ?? 0 })), meta: buildMeta(page, limit, total) };
+  const labels = await categoryLabels(items.map((i) => i.categoryId).filter(Boolean));
+  return {
+    items: items.map((i) => ({ ...i, attemptCount: ac.get(String(i._id)) ?? 0, categoryLabel: labels.get(String(i.categoryId))?.label ?? '' })),
+    meta: buildMeta(page, limit, total),
+  };
 }
 
 export async function adminGetTest(id: string) {
@@ -99,7 +111,9 @@ export async function adminGetTest(id: string) {
     .lean();
   if (!test) throw ApiError.notFound('Test not found');
   const attemptCount = await TestAttemptModel.countDocuments({ testId: test._id });
-  return { ...test, durationMinutes: Math.round(test.durationSeconds / 60), attemptCount };
+  const categoryId = (test.categoryId as unknown as { _id?: Types.ObjectId } | null)?._id;
+  const labels = categoryId ? await categoryLabels([categoryId]) : new Map();
+  return { ...test, durationMinutes: Math.round(test.durationSeconds / 60), attemptCount, categoryLabel: labels.get(String(categoryId))?.label ?? '' };
 }
 
 export async function createTest(input: TestInput, userId: Types.ObjectId) {
@@ -114,8 +128,17 @@ export async function createTest(input: TestInput, userId: Types.ObjectId) {
     createdBy: userId,
     updatedBy: userId,
   });
+  if (input.autoTranslate) await autoHindi(doc);
   await doc.save();
   return doc;
+}
+
+/** Fills the empty Hindi fields of a test from its English text (see fillHindiContent). */
+async function autoHindi(test: TestDocument) {
+  const current = (test.toObject().hi ?? {}) as HindiContent;
+  const { hi, warning } = await fillHindiContent({ title: test.title, description: test.description, instructions: test.instructions }, current);
+  test.set('hi', hi);
+  test.$locals.translationWarning = warning;
 }
 
 export async function updateTest(id: string, input: Partial<TestInput>, userId: Types.ObjectId) {
@@ -126,15 +149,26 @@ export async function updateTest(id: string, input: Partial<TestInput>, userId: 
     (input.seriesId !== undefined && String(input.seriesId ?? '') !== String(test.seriesId ?? '')) ||
     (input.categoryId !== undefined && String(input.categoryId) !== String(test.categoryId));
   if (placementChanged) {
+    if (test.autoCategoryId) throw ApiError.badRequest('An automatic practice set always stays in its own category.');
     const placement = await resolvePlacement({
       seriesId: input.seriesId !== undefined ? input.seriesId : test.seriesId ? String(test.seriesId) : null,
       categoryId: input.categoryId ?? (input.seriesId !== undefined ? undefined : String(test.categoryId)),
     });
     test.set(placement);
   }
+  const oldKeys = [test.questionPaperPdf?.key, test.solutionPdf?.key].filter(Boolean) as string[];
   test.set({ ...toDoc(input), updatedBy: userId });
+  if (input.autoTranslate) await autoHindi(test);
   await test.save();
+  const keep = new Set([test.questionPaperPdf?.key, test.solutionPdf?.key].filter(Boolean));
+  await Promise.all(oldKeys.filter((k) => !keep.has(k)).map((k) => deletePrivateFile(k)));
   return test;
+}
+
+const AUTO_LOCKED = 'This is an automatic practice set. Its questions come from the Question Bank - add or remove questions in their category instead.';
+
+function assertNotAuto(test: { autoCategoryId?: unknown }) {
+  if (test.autoCategoryId) throw ApiError.badRequest(AUTO_LOCKED);
 }
 
 async function assertQuestionsUsable(ids: string[]) {
@@ -147,16 +181,21 @@ async function assertQuestionsUsable(ids: string[]) {
 export async function setTestQuestions(id: string, questionIds: string[], userId: Types.ObjectId) {
   const test = await TestModel.findById(id);
   if (!test) throw ApiError.notFound('Test not found');
+  assertNotAuto(test);
   await assertQuestionsUsable(questionIds);
+  const before = test.questionIds.map(String);
   test.questionIds = questionIds.map((q) => new Types.ObjectId(q));
   test.updatedBy = userId;
   await test.save();
+  await tagQuestionsWithTestCategory(questionIds, test);
+  await syncForQuestions([...before, ...questionIds]);
   return test;
 }
 
 export async function addTestQuestions(id: string, questionIds: string[], userId: Types.ObjectId) {
   const test = await TestModel.findById(id);
   if (!test) throw ApiError.notFound('Test not found');
+  assertNotAuto(test);
   const existing = new Set(test.questionIds.map(String));
   const toAdd = [...new Set(questionIds)].filter((q) => !existing.has(q));
   if (toAdd.length) {
@@ -166,15 +205,19 @@ export async function addTestQuestions(id: string, questionIds: string[], userId
   }
   test.updatedBy = userId;
   await test.save();
+  await tagQuestionsWithTestCategory(toAdd, test);
+  await syncForQuestions(toAdd);
   return { added: toAdd.length, total: test.questionIds.length };
 }
 
 export async function removeTestQuestion(id: string, questionId: string, userId: Types.ObjectId) {
   const test = await TestModel.findById(id);
   if (!test) throw ApiError.notFound('Test not found');
+  assertNotAuto(test);
   test.questionIds = test.questionIds.filter((q) => String(q) !== questionId);
   test.updatedBy = userId;
   await test.save();
+  await syncForQuestions([questionId]);
   return test;
 }
 
@@ -196,6 +239,7 @@ export async function setTestPublication(id: string, status: PublicationStatus, 
   test.publicationStatus = status;
   test.updatedBy = userId;
   await test.save();
+  if (!test.autoCategoryId) await syncForQuestions(test.questionIds);
   return test;
 }
 
@@ -205,7 +249,8 @@ export async function duplicateTest(id: string, userId: Types.ObjectId) {
   const { _id, createdAt: _c, updatedAt: _u, publishedAt: _p, ...rest } = source as typeof source & { createdAt?: Date; updatedAt?: Date };
   void _id;
   const title = `${source.title} (Copy)`.slice(0, 200);
-  const copy = new TestModel({ ...rest, title, slug: await uniqueSlug(title, testSlugExists), publicationStatus: 'draft', createdBy: userId, updatedBy: userId });
+  // A copy is a normal test the admin can edit freely.
+  const copy = new TestModel({ ...rest, title, slug: await uniqueSlug(title, testSlugExists), publicationStatus: 'draft', autoCategoryId: null, autoPart: null, createdBy: userId, updatedBy: userId });
   await copy.save();
   return copy;
 }
@@ -218,9 +263,12 @@ export async function removeTest(id: string, userId: Types.ObjectId) {
     test.publicationStatus = 'archived';
     test.updatedBy = userId;
     await test.save();
+    if (!test.autoCategoryId) await syncForQuestions(test.questionIds);
     return { archived: true };
   }
   await test.deleteOne();
+  if (!test.autoCategoryId) await syncForQuestions(test.questionIds);
+  await Promise.all([test.questionPaperPdf?.key, test.solutionPdf?.key].filter(Boolean).map((k) => deletePrivateFile(k!)));
   return { archived: false };
 }
 
@@ -273,7 +321,8 @@ export async function publicTestDetail(slug: string, studentId?: string) {
     return { _id: String(c._id), name: c.name, slug: c.slug, path: acc };
   });
 
-  const { questionIds, categoryPath: _cp, ...safe } = test;
+  const { questionIds, categoryPath: _cp, questionPaperPdf, solutionPdf, ...safe } = test;
+  const paper = await paperPermissions(test, studentId, hasAccess);
   return {
     ...safe,
     questionCount: questionIds.length,
@@ -286,5 +335,129 @@ export async function publicTestDetail(slug: string, studentId?: string) {
     attemptsLeft,
     inProgressAttemptId: inProgress ? String(inProgress._id) : null,
     myAttempts: attempts.map((a) => ({ ...a, _id: String(a._id) })),
+    pdfs: {
+      questionPaper: questionPaperPdf ? { fileName: questionPaperPdf.fileName, size: questionPaperPdf.size, canDownload: hasAccess && !!studentId } : null,
+      solutions: solutionPdf ? { fileName: solutionPdf.fileName, size: solutionPdf.size, canDownload: paper.solutions } : null,
+    },
+    canViewPaper: paper.paper,
+    paperLockedReason: paper.reason,
   };
+}
+
+type PaperTest = { _id: Types.ObjectId; moduleType?: string | null; resultVisibility?: string | null; availableUntil?: Date | null; isFree?: boolean | null; seriesId?: Types.ObjectId | null };
+
+/**
+ * PYQ papers can be viewed / printed by anyone with access. For mock tests the paper and its
+ * solutions become available only after the student has submitted an attempt and results are visible.
+ */
+async function paperPermissions(test: PaperTest, studentId: string | undefined, hasAccess: boolean) {
+  if (!studentId) return { paper: false, solutions: false, reason: 'Sign in to view the question paper.' };
+  if (!hasAccess) return { paper: false, solutions: false, reason: 'Unlock this test to view the question paper.' };
+  if (test.moduleType === 'PYQS') return { paper: true, solutions: true, reason: '' };
+  const resultsHidden = test.resultVisibility === 'HIDDEN' || (test.resultVisibility === 'AFTER_WINDOW' && !!test.availableUntil && test.availableUntil > new Date());
+  const submitted = await TestAttemptModel.exists({ studentId, testId: test._id, status: { $ne: 'IN_PROGRESS' } });
+  if (!submitted) return { paper: false, solutions: false, reason: 'The question paper and solutions unlock after you submit this test.' };
+  if (resultsHidden) return { paper: false, solutions: false, reason: 'Solutions will be available when results are released.' };
+  return { paper: true, solutions: true, reason: '' };
+}
+
+export type PdfKind = 'question-paper' | 'solutions';
+
+/** Resolves a downloadable PDF for a student (access-checked) or an admin. */
+export async function getTestPdf(ref: { slug?: string; id?: string }, kind: PdfKind, studentId?: string, isAdmin = false) {
+  const test = ref.id ? await TestModel.findById(ref.id).lean() : await TestModel.findOne({ slug: ref.slug, publicationStatus: 'published' }).lean();
+  if (!test) throw ApiError.notFound('Test not found');
+  const file = kind === 'question-paper' ? test.questionPaperPdf : test.solutionPdf;
+  if (!file) throw ApiError.notFound('No PDF has been uploaded for this test');
+  if (!isAdmin) {
+    const hasAccess = await hasTestAccess(studentId, test);
+    const perms = await paperPermissions(test, studentId, hasAccess);
+    const allowed = kind === 'question-paper' ? hasAccess : perms.solutions;
+    if (!allowed) throw ApiError.forbidden(perms.reason || 'You do not have access to this PDF');
+  }
+  const { stream, size } = await openPrivateFile(file.key);
+  return { stream, size, fileName: file.fileName };
+}
+
+/** Full paper (questions in order + answer key) for the printable / Save-as-PDF view. */
+export async function getPrintablePaper(slug: string, studentId: string) {
+  const test = await TestModel.findOne({ slug, publicationStatus: 'published' }).lean();
+  if (!test) throw ApiError.notFound('Test not found');
+  const hasAccess = await hasTestAccess(studentId, test);
+  const perms = await paperPermissions(test, studentId, hasAccess);
+  if (!perms.paper) throw ApiError.forbidden(perms.reason);
+  return buildPrintable(test);
+}
+
+export async function getPrintablePaperAdmin(id: string) {
+  const test = await TestModel.findById(id).lean();
+  if (!test) throw ApiError.notFound('Test not found');
+  return buildPrintable(test);
+}
+
+async function buildPrintable(test: Test & { _id: Types.ObjectId }) {
+  const questions = await QuestionModel.find({ _id: { $in: test.questionIds } }).select('-contentHash -createdBy -updatedBy').lean();
+  const byId = new Map(questions.map((q) => [String(q._id), q]));
+  return {
+    title: test.title,
+    paperName: test.paperName ?? '',
+    paperYear: test.paperYear ?? null,
+    testType: test.testType,
+    durationMinutes: Math.round(test.durationSeconds / 60),
+    marksPerCorrect: test.marksPerCorrect,
+    negativeMarks: test.negativeMarks,
+    totalMarks: test.totalMarks,
+    languageOptions: test.languageOptions,
+    instructions: test.instructions ?? '',
+    questions: test.questionIds
+      .map((qid) => byId.get(String(qid)))
+      .filter((q): q is NonNullable<typeof q> => !!q)
+      .map((q, i) => ({ number: i + 1, ...toSolutionQuestion(q), correctOption: q.correctOption })),
+  };
+}
+
+
+/**
+ * Published tests placed directly in a category (no series) - practice sets and stand-alone tests.
+ * Shown on the website's category pages next to the test series.
+ */
+export async function publicCategoryTests(q: { category: string; moduleType?: ModuleType; page: number; limit: number }) {
+  const { page, limit, skip } = pageParams(q.page, q.limit);
+  const now = new Date();
+  const filter = {
+    publicationStatus: 'published',
+    moduleType: q.moduleType ?? 'TEST_SERIES',
+    seriesId: null,
+    categoryPath: new Types.ObjectId(q.category),
+    'questionIds.0': { $exists: true },
+    $and: [{ $or: [{ availableFrom: null }, { availableFrom: { $lte: now } }] }, { $or: [{ availableUntil: null }, { availableUntil: { $gte: now } }] }],
+  };
+  const [items, total] = await Promise.all([
+    TestModel.aggregate([
+      { $match: filter },
+      { $sort: { autoCategoryId: 1, sortOrder: 1, createdAt: -1 } },
+      { $skip: skip },
+      { $limit: limit },
+      {
+        $project: {
+          title: 1,
+          'hi.title': 1,
+          slug: 1,
+          description: 1,
+          testType: 1,
+          durationSeconds: 1,
+          totalMarks: 1,
+          marksPerCorrect: 1,
+          negativeMarks: 1,
+          isFree: 1,
+          languageOptions: 1,
+          paperYear: 1,
+          questionCount: { $size: '$questionIds' },
+          isPracticeSet: { $ne: [{ $ifNull: ['$autoCategoryId', null] }, null] },
+        },
+      },
+    ]),
+    TestModel.countDocuments(filter),
+  ]);
+  return { items, meta: buildMeta(page, limit, total) };
 }

@@ -1,6 +1,7 @@
 import type { Request, Response } from 'express';
 import * as categoryService from '../services/category.service.js';
 import { audit } from '../services/audit.service.js';
+import { cached } from '../services/cache.service.js';
 import { ApiError } from '../utils/ApiError.js';
 import { created, noContent, ok } from '../utils/ApiResponse.js';
 import type { ModuleType } from '../types/enums.js';
@@ -8,14 +9,14 @@ import type { ModuleType } from '../types/enums.js';
 // ---------- public
 export async function publicTree(req: Request, res: Response) {
   const { moduleType } = req.query as unknown as { moduleType: ModuleType };
-  return ok(res, await categoryService.getPublicTree(moduleType));
+  return ok(res, await cached('catalog', `categories:tree:${moduleType}`, 300, () => categoryService.getPublicTree(moduleType)));
 }
 
 export async function resolve(req: Request, res: Response) {
   const moduleType = (req.query.moduleType as ModuleType) ?? 'TEST_SERIES';
   const path = String(req.params.path ?? req.query.path ?? '');
   if (!path) throw ApiError.badRequest('Category path is required');
-  return ok(res, await categoryService.resolvePath(moduleType, path));
+  return ok(res, await cached('catalog', `categories:resolve:${moduleType}:${path.toLowerCase()}`, 300, () => categoryService.resolvePath(moduleType, path)));
 }
 
 // ---------- admin

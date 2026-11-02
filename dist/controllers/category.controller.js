@@ -1,18 +1,19 @@
 import * as categoryService from '../services/category.service.js';
 import { audit } from '../services/audit.service.js';
+import { cached } from '../services/cache.service.js';
 import { ApiError } from '../utils/ApiError.js';
 import { created, noContent, ok } from '../utils/ApiResponse.js';
 // ---------- public
 export async function publicTree(req, res) {
     const { moduleType } = req.query;
-    return ok(res, await categoryService.getPublicTree(moduleType));
+    return ok(res, await cached('catalog', `categories:tree:${moduleType}`, 300, () => categoryService.getPublicTree(moduleType)));
 }
 export async function resolve(req, res) {
     const moduleType = req.query.moduleType ?? 'TEST_SERIES';
     const path = String(req.params.path ?? req.query.path ?? '');
     if (!path)
         throw ApiError.badRequest('Category path is required');
-    return ok(res, await categoryService.resolvePath(moduleType, path));
+    return ok(res, await cached('catalog', `categories:resolve:${moduleType}:${path.toLowerCase()}`, 300, () => categoryService.resolvePath(moduleType, path)));
 }
 // ---------- admin
 export async function adminTree(req, res) {

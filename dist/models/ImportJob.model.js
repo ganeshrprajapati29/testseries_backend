@@ -17,6 +17,7 @@ const importJobSchema = new Schema({
         sourceExam: { type: String, default: '' },
         sourceYear: { type: Number, default: null },
         language: { type: String, default: 'en' },
+        categoryId: { type: Schema.Types.ObjectId, ref: 'Category', default: null },
     },
     totalRows: { type: Number, default: 0 },
     validRows: { type: Number, default: 0 },

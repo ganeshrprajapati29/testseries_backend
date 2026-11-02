@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { LANGUAGES, MODULE_TYPES, PUBLICATION_STATUSES, RESULT_VISIBILITY, TEST_TYPES } from '../types/enums.js';
-import { objectId, optionalDate, optionalObjectId, pageQuery, searchString } from './common.js';
+import { objectId, optionalDate, optionalObjectId, pageQuery, pdfRef, searchString } from './common.js';
 const testBase = z.object({
     title: z.string().trim().min(3, 'Title must be at least 3 characters').max(200),
     description: z.string().trim().max(5000).default(''),
@@ -22,7 +22,17 @@ const testBase = z.object({
     randomizeQuestions: z.boolean().default(false),
     randomizeOptions: z.boolean().default(false),
     resultVisibility: z.enum(RESULT_VISIBILITY).default('IMMEDIATE'),
+    questionPaperPdf: pdfRef.optional(),
+    solutionPdf: pdfRef.optional(),
     sortOrder: z.coerce.number().int().min(0).max(100000).default(0),
+    hi: z
+        .object({
+        title: z.string().trim().max(400).default(''),
+        description: z.string().trim().max(8000).default(''),
+        instructions: z.string().trim().max(15000).default(''),
+    })
+        .optional(),
+    autoTranslate: z.boolean().optional(),
 });
 function refineTest(schema, requireLink) {
     return schema

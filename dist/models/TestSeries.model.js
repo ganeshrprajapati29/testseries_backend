@@ -5,6 +5,12 @@ const testSeriesSchema = new Schema({
     slug: { type: String, required: true, lowercase: true, trim: true, maxlength: 120 },
     description: { type: String, trim: true, maxlength: 10000, default: '' },
     highlights: [{ type: String, trim: true, maxlength: 200 }],
+    /** Hindi version of the title / description / highlights (typed or machine translated). */
+    hi: {
+        title: { type: String, trim: true, maxlength: 400, default: '' },
+        description: { type: String, trim: true, maxlength: 15000, default: '' },
+        highlights: [{ type: String, trim: true, maxlength: 400 }],
+    },
     moduleType: { type: String, enum: MODULE_TYPES, required: true, default: 'TEST_SERIES' },
     categoryId: { type: Schema.Types.ObjectId, ref: 'Category', required: true },
     /** Category + all of its ancestors - lets a parent category list every series below it. */

@@ -12,9 +12,13 @@ export const createImportSchema = z.object({
         .optional()
         .transform((v) => (typeof v === 'number' ? v : null)),
     language: z.enum(LANGUAGES).default('en'),
+    /** Default category for rows without a "category" column value. */
+    categoryId: optionalObjectId,
 });
 export const commitImportSchema = z.object({
     skipDuplicates: z.boolean().default(true),
+    /** Translate the imported English questions to Hindi in the background. */
+    autoTranslate: z.boolean().default(false),
 });
 export const listImportsQuery = z.object({ ...pageQuery });
 //# sourceMappingURL=import.validator.js.map

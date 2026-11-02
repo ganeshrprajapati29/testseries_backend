@@ -26,6 +26,23 @@ export const optionalDate = z
   .optional()
   .transform((v) => v ?? null);
 
+/** A required image reference: an uploaded file (/uploads/...) or an https:// link. */
+export const imageRef = z
+  .string()
+  .trim()
+  .max(1000)
+  .refine((v) => v.startsWith('/uploads/') || /^https:\/\/\S+$/i.test(v), 'Must be an https:// URL or an uploaded file');
+
+export const imageList = z.array(imageRef).max(10, 'At most 10 images').default([]);
+
+export const pdfRef = z
+  .object({
+    key: z.string().regex(/^pdfs\/[\w\-/]+\.pdf$/, 'Invalid PDF reference'),
+    fileName: z.string().trim().min(1).max(160),
+    size: z.number().int().min(0).max(30 * 1024 * 1024),
+  })
+  .nullable();
+
 export const imageUrl = z
   .string()
   .trim()

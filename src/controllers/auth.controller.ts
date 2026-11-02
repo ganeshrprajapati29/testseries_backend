@@ -12,13 +12,13 @@ function meta(req: Request) {
 }
 
 function setSessionCookie(res: Response, token: string, ttl: number) {
-  res.cookie(SESSION_COOKIE, token, sessionCookieOptions(ttl));
+  res.cookie(SESSION_COOKIE, token, sessionCookieOptions(ttl, res.req?.hostname));
   // Rotate the CSRF token whenever the session changes.
   issueCsrfToken(res);
 }
 
 function clearSessionCookie(res: Response) {
-  const { maxAge: _m, ...opts } = sessionCookieOptions(0);
+  const { maxAge: _m, ...opts } = sessionCookieOptions(0, res.req?.hostname);
   res.clearCookie(SESSION_COOKIE, opts);
 }
 
@@ -87,4 +87,10 @@ export async function changePassword(req: Request, res: Response) {
   await authService.changePassword(req.auth!.user.id, req.auth!.sessionId, req.body.currentPassword, req.body.newPassword);
   if (req.auth!.scope === 'admin') await audit(req, { action: 'admin.password_changed', entityType: 'User', entityId: req.auth!.user.id });
   return ok(res, null, 'Password changed. Other devices have been signed out.');
+}
+
+export async function changeEmail(req: Request, res: Response) {
+  const { user, oldEmail } = await authService.changeEmail(req.auth!.user.id, req.auth!.sessionId, req.body.currentPassword, req.body.newEmail);
+  await audit(req, { action: 'account.email_changed', entityType: 'User', entityId: user.id, summary: `${oldEmail} -> ${user.email}` });
+  return ok(res, { user: authService.publicUser(user) }, 'Email changed. Use the new email to sign in next time.');
 }

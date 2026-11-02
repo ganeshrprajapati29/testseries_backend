@@ -33,6 +33,7 @@ const userSchema = new Schema(
 
 userSchema.index({ normalizedEmail: 1 }, { unique: true });
 userSchema.index({ role: 1, createdAt: -1 });
+userSchema.index({ mobile: 1 }, { sparse: true });
 userSchema.index({ name: 'text', email: 'text' });
 
 export type User = InferSchemaType<typeof userSchema>;

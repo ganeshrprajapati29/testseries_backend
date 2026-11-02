@@ -1,3 +1,8 @@
+import { TestModel } from '../models/Test.model.js';
+import { tagQuestionsWithTestCategory } from '../services/questionCategory.service.js';
+import { translateQuestionsInBackground } from '../services/questionTranslate.service.js';
+import { translationEnabled } from '../services/translate.service.js';
+import { syncForQuestions } from '../services/practiceSet.service.js';
 import type { Request, Response } from 'express';
 import * as importService from '../services/import.service.js';
 import { audit } from '../services/audit.service.js';
@@ -12,12 +17,12 @@ export async function template(_req: Request, res: Response) {
 
 export async function upload(req: Request, res: Response) {
   if (!req.file) throw ApiError.badRequest('Choose a .csv or .xlsx file to import');
-  const { targetTestId, subject, topic, sourceExam, sourceYear, language } = req.body;
+  const { targetTestId, subject, topic, sourceExam, sourceYear, language, categoryId } = req.body;
   const job = await importService.createImportJob({
     buffer: req.file.buffer,
     fileName: req.file.originalname,
     targetTestId,
-    defaults: { subject, topic, sourceExam, sourceYear, language },
+    defaults: { subject, topic, sourceExam, sourceYear, language, categoryId },
     userId: req.auth!.user._id,
   });
   await audit(req, {
@@ -30,9 +35,18 @@ export async function upload(req: Request, res: Response) {
 }
 
 export async function commit(req: Request, res: Response) {
-  const result = await importService.commitImportJob(String(req.params.id), req.body.skipDuplicates, req.auth!.user._id);
-  await audit(req, { action: 'import.commit', entityType: 'ImportJob', entityId: String(req.params.id), metadata: { ...result } });
-  return ok(res, result, `${result.importedCount} question(s) imported`);
+  const { questionIds, ...result } = await importService.commitImportJob(String(req.params.id), req.body.skipDuplicates, req.auth!.user._id);
+  if (result.targetTestId && questionIds.length) {
+    const test = await TestModel.findById(result.targetTestId, { categoryId: 1, categoryPath: 1 }).lean();
+    if (test) await tagQuestionsWithTestCategory(questionIds, test);
+  }
+  await syncForQuestions(questionIds);
+  const translating = req.body.autoTranslate && translationEnabled() && questionIds.length > 0;
+  if (translating) translateQuestionsInBackground(questionIds);
+  await audit(req, { action: 'import.commit', entityType: 'ImportJob', entityId: String(req.params.id), metadata: { ...result, autoTranslate: !!translating } });
+  const linked = result.linkedExisting ? `, ${result.linkedExisting} already in the bank filed under the chosen categories` : '';
+  const msg = `${result.importedCount} question(s) imported${linked}${translating ? ' - Hindi translation is running in the background' : ''}`;
+  return ok(res, { ...result, translating: !!translating }, msg);
 }
 
 export async function cancel(req: Request, res: Response) {

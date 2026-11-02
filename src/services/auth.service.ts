@@ -52,16 +52,25 @@ async function createSession(user: UserDocument, scope: SessionScope, meta: { ip
   return { token, ttl };
 }
 
-export async function registerStudent(input: { name: string; email: string; mobile?: string; password: string }, meta: { ip?: string; userAgent?: string }) {
+/** Throws when another account already uses this mobile number. */
+export async function assertMobileFree(mobile: string | undefined, exceptUserId?: string) {
+  if (!mobile) return;
+  const filter: Record<string, unknown> = { mobile };
+  if (exceptUserId) filter._id = { $ne: exceptUserId };
+  if (await UserModel.exists(filter)) throw ApiError.conflict('An account with this mobile number already exists', 'MOBILE_TAKEN');
+}
+
+export async function registerStudent(input: { name: string; email: string; mobile: string; password: string }, meta: { ip?: string; userAgent?: string }) {
   const normalizedEmail = normalizeEmail(input.email);
   const exists = await UserModel.exists({ normalizedEmail });
   if (exists) throw ApiError.conflict('An account with this email already exists', 'EMAIL_TAKEN');
+  await assertMobileFree(input.mobile);
 
   const user = await UserModel.create({
     name: input.name,
     email: input.email.trim(),
     normalizedEmail,
-    mobile: input.mobile || undefined,
+    mobile: input.mobile,
     passwordHash: await hashPassword(input.password),
     role: 'student', // public registration can never create admins
     lastLoginAt: new Date(),
@@ -198,7 +207,31 @@ export async function changePassword(userId: string, currentSessionId: string, c
   await revokeAllSessions(userId, currentSessionId);
 }
 
+/** Changes the sign-in email after re-checking the password. Other devices are signed out. */
+export async function changeEmail(userId: string, currentSessionId: string, currentPassword: string, newEmail: string) {
+  const user = await UserModel.findById(userId).select('+passwordHash');
+  if (!user) throw ApiError.notFound('User not found');
+  if (!(await verifyPassword(user.passwordHash, currentPassword))) {
+    throw ApiError.validation([{ path: 'body.currentPassword', message: 'Current password is incorrect' }]);
+  }
+  const normalizedEmail = normalizeEmail(newEmail);
+  if (normalizedEmail === user.normalizedEmail) {
+    throw ApiError.validation([{ path: 'body.newEmail', message: 'This is already your email address' }]);
+  }
+  if (await UserModel.exists({ normalizedEmail, _id: { $ne: user._id } })) {
+    throw ApiError.validation([{ path: 'body.newEmail', message: 'Another account already uses this email' }]);
+  }
+  const oldEmail = user.email;
+  user.email = newEmail.trim();
+  user.normalizedEmail = normalizedEmail;
+  user.emailVerifiedAt = null;
+  await user.save();
+  await revokeAllSessions(userId, currentSessionId);
+  return { user, oldEmail };
+}
+
 export async function updateProfile(userId: string, input: { name?: string; mobile?: string; preferredLanguage?: 'en' | 'hi' }) {
+  await assertMobileFree(input.mobile, userId);
   const user = await UserModel.findByIdAndUpdate(userId, { $set: input }, { new: true, runValidators: true });
   if (!user) throw ApiError.notFound('User not found');
   return user;

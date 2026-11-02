@@ -1,5 +1,21 @@
 import rateLimit, { type Options } from 'express-rate-limit';
+import { RedisStore, type RedisReply } from 'rate-limit-redis';
 import { env } from '../config/env.js';
+import { getRedis } from '../config/redis.js';
+
+/** Counters live in Redis when available so limits hold across restarts and multiple processes. */
+function store(name: string): Partial<Options> {
+  const redis = getRedis();
+  if (!redis) return {};
+  return {
+    store: new RedisStore({
+      prefix: `rl:${name}:`,
+      sendCommand: (command: string, ...args: string[]) => redis.call(command, ...args) as Promise<RedisReply>,
+    }),
+    // If Redis is briefly unavailable, let requests through instead of failing them.
+    passOnStoreError: true,
+  };
+}
 
 const base: Partial<Options> = {
   standardHeaders: 'draft-8',
@@ -14,15 +30,21 @@ const base: Partial<Options> = {
 };
 
 /** General API limiter. */
-export const apiLimiter = rateLimit({ ...base, windowMs: 60 * 1000, limit: 300 });
+export const apiLimiter = rateLimit({ ...base, ...store('api'), windowMs: 60 * 1000, limit: 300 });
 
 /** Login / register - protects against credential stuffing. */
-export const authLimiter = rateLimit({ ...base, windowMs: 15 * 60 * 1000, limit: 20 });
+export const authLimiter = rateLimit({ ...base, ...store('auth'), windowMs: 15 * 60 * 1000, limit: 20 });
 
 /** Forgot-password - prevents email bombing. */
-export const passwordResetLimiter = rateLimit({ ...base, windowMs: 60 * 60 * 1000, limit: 5 });
+export const passwordResetLimiter = rateLimit({ ...base, ...store('reset'), windowMs: 60 * 60 * 1000, limit: 5 });
 
 /** Answer autosave can be chatty during an exam. */
-export const examLimiter = rateLimit({ ...base, windowMs: 60 * 1000, limit: 240 });
+export const examLimiter = rateLimit({ ...base, ...store('exam'), windowMs: 60 * 1000, limit: 240 });
 
-export const uploadLimiter = rateLimit({ ...base, windowMs: 60 * 60 * 1000, limit: 60 });
+export const uploadLimiter = rateLimit({ ...base, ...store('upload'), windowMs: 60 * 60 * 1000, limit: 60 });
+
+/** Machine translation calls an external provider - keep admins well inside its free limits. */
+export const translateLimiter = rateLimit({ ...base, ...store('translate'), windowMs: 60 * 1000, limit: 30 });
+
+/** Question reports - generous for genuine use, stops spamming. */
+export const reportLimiter = rateLimit({ ...base, ...store('report'), windowMs: 60 * 60 * 1000, limit: 60 });

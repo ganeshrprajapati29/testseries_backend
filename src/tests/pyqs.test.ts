@@ -35,8 +35,11 @@ describe('PYQs', () => {
     expect(ndaNode.children.map((s: { name: string }) => s.name)).toEqual(['Maths', 'Biology', 'Chemistry', 'Physics', 'History', 'Geography', 'Polity', 'Economics']);
 
     const subject = await anon.get('/api/pyqs/category/nda/maths');
-    expect(subject.body.data.years).toEqual([2024]);
-    expect(subject.body.data.papersByYear[0].papers[0].questionCount).toBe(2);
+    expect(subject.body.data.years).toEqual([{ year: 2024, count: 1 }]);
+    expect(subject.body.data.papers[0].questionCount).toBe(2);
+    expect(subject.body.data.meta.total).toBe(1);
+    const filtered = await anon.get('/api/pyqs/category/nda/maths?year=2023');
+    expect(filtered.body.data.papers).toHaveLength(0);
 
     const detail = await anon.get(`/api/pyqs/papers/${paper.body.data.slug}`);
     expect(detail.body.data.hasAccess).toBe(true);

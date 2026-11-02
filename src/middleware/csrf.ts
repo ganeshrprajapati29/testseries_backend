@@ -10,7 +10,7 @@ const EXEMPT_PATHS = ['/api/payments/webhook'];
 
 export function issueCsrfToken(res: Response): string {
   const token = randomToken(24);
-  res.cookie(CSRF_COOKIE, token, csrfCookieOptions());
+  res.cookie(CSRF_COOKIE, token, csrfCookieOptions(res.req?.hostname));
   return token;
 }
 

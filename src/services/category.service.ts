@@ -5,6 +5,9 @@ import { TestModel } from '../models/Test.model.js';
 import { TestSeriesModel } from '../models/TestSeries.model.js';
 import type { ModuleType } from '../types/enums.js';
 import { ApiError } from '../utils/ApiError.js';
+import { QuestionModel } from '../models/Question.model.js';
+import { questionCountsByCategory, recomputeQuestionPaths } from './questionCategory.service.js';
+import { syncPracticeSets } from './practiceSet.service.js';
 import { slugify } from '../utils/slugify.js';
 
 export const MAX_CATEGORY_DEPTH = 4;
@@ -18,6 +21,7 @@ export interface CategoryNode {
   depth: number;
   description: string;
   icon: string;
+  imageUrl: string;
   sortOrder: number;
   isActive: boolean;
   status: string;
@@ -25,6 +29,7 @@ export interface CategoryNode {
   children: CategoryNode[];
   seriesCount?: number;
   testCount?: number;
+  questionCount?: number;
 }
 
 type LeanCategory = {
@@ -36,6 +41,7 @@ type LeanCategory = {
   depth: number;
   description?: string | null;
   icon?: string | null;
+  imageUrl?: string | null;
   sortOrder?: number | null;
   isActive?: boolean | null;
   status?: string | null;
@@ -54,6 +60,7 @@ export function buildTree(categories: LeanCategory[]): CategoryNode[] {
       depth: c.depth,
       description: c.description ?? '',
       icon: c.icon ?? '',
+      imageUrl: c.imageUrl ?? '',
       sortOrder: c.sortOrder ?? 0,
       isActive: c.isActive ?? true,
       status: c.status ?? 'active',
@@ -94,6 +101,7 @@ export async function getAdminTree(moduleType?: ModuleType, includeArchived = fa
       { $group: { _id: '$categoryId', count: { $sum: 1 } } },
     ]),
   ]);
+  const { counts: qMap } = await questionCountsByCategory();
   const sMap = new Map(seriesCounts.map((s) => [String(s._id), s.count]));
   const tMap = new Map(testCounts.map((s) => [String(s._id), s.count]));
 
@@ -102,6 +110,7 @@ export async function getAdminTree(moduleType?: ModuleType, includeArchived = fa
     for (const n of nodes) {
       n.seriesCount = sMap.get(n._id) ?? 0;
       n.testCount = tMap.get(n._id) ?? 0;
+      n.questionCount = qMap.get(n._id) ?? 0;
       decorate(n.children);
     }
   };
@@ -274,6 +283,11 @@ export async function updateCategory(
     }
     await category.save({ session });
     if (parentChanged) await rebuildSubtree(category, session);
+    if (parentChanged) await recomputeQuestionPaths({ categoryPaths: category._id });
+    return category;
+  }).then(async (category) => {
+    // Practice sets carry the category path - refresh them after a move.
+    if (input.parentId !== undefined) await syncPracticeSets((await subtreeIds(category._id)).map(String));
     return category;
   });
 }
@@ -301,7 +315,8 @@ export async function setCategoryActive(id: string, isActive: boolean) {
 async function activeContentCount(ids: Types.ObjectId[]) {
   const [series, tests] = await Promise.all([
     TestSeriesModel.countDocuments({ categoryId: { $in: ids }, publicationStatus: 'published' }),
-    TestModel.countDocuments({ categoryId: { $in: ids }, publicationStatus: 'published' }),
+    // Automatic practice sets are removed together with the category, so they do not block it.
+    TestModel.countDocuments({ categoryId: { $in: ids }, publicationStatus: 'published', autoCategoryId: null }),
   ]);
   return { series, tests };
 }
@@ -318,6 +333,7 @@ export async function archiveCategory(id: string) {
     );
   }
   await CategoryModel.updateMany({ _id: { $in: ids } }, { status: 'archived', isActive: false, archivedAt: new Date() });
+  await syncPracticeSets(ids.map(String));
   return { archived: ids.length };
 }
 
@@ -341,12 +357,15 @@ export async function deleteCategory(id: string) {
   const [children, series, tests] = await Promise.all([
     CategoryModel.countDocuments({ parentId: category._id }),
     TestSeriesModel.countDocuments({ categoryId: category._id }),
-    TestModel.countDocuments({ categoryId: category._id }),
+    TestModel.countDocuments({ categoryId: category._id, autoCategoryId: null }),
   ]);
   if (children || series || tests) {
     throw ApiError.conflict('Only empty categories without sub-categories, series or tests can be deleted. Archive it instead.', 'CATEGORY_IN_USE');
   }
+  // Unlink questions from this category (the questions themselves are kept).
+  await QuestionModel.updateMany({ categoryIds: category._id }, { $pull: { categoryIds: category._id, categoryPaths: category._id } });
   await category.deleteOne();
+  await syncPracticeSets([String(category._id)]);
 }
 
 export async function categoryPathFor(categoryId: string | Types.ObjectId) {

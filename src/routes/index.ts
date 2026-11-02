@@ -1,5 +1,7 @@
 import { Router } from 'express';
 import mongoose from 'mongoose';
+import { env } from '../config/env.js';
+import { redisReady } from '../config/redis.js';
 import adminRoutes from './admin.routes.js';
 import authRoutes from './auth.routes.js';
 import { publicCategoryRouter } from './category.routes.js';
@@ -17,7 +19,8 @@ const router = Router();
 
 router.get('/health', (_req, res) => {
   const dbState = mongoose.connection.readyState === 1 ? 'up' : 'down';
-  res.status(dbState === 'up' ? 200 : 503).json({ success: dbState === 'up', data: { status: 'ok', database: dbState, time: new Date().toISOString() } });
+  const cache = env.REDIS_URL ? (redisReady() ? 'up' : 'down') : 'disabled';
+  res.status(dbState === 'up' ? 200 : 503).json({ success: dbState === 'up', data: { status: 'ok', database: dbState, cache, time: new Date().toISOString() } });
 });
 
 router.use('/auth', authRoutes);

@@ -23,12 +23,20 @@ const importJobSchema = new Schema(
       sourceExam: { type: String, default: '' },
       sourceYear: { type: Number, default: null },
       language: { type: String, default: 'en' },
+      categoryId: { type: Schema.Types.ObjectId, ref: 'Category', default: null },
     },
     totalRows: { type: Number, default: 0 },
     validRows: { type: Number, default: 0 },
     invalidRows: { type: Number, default: 0 },
     duplicateRows: { type: Number, default: 0 },
     importedCount: { type: Number, default: 0 },
+    /** Where the valid rows will appear: one entry per category with the number of questions. */
+    destinations: {
+      type: [{ _id: false, categoryId: String, label: String, moduleType: String, count: Number }],
+      default: [],
+    },
+    /** Valid rows without any category - they only reach the website when added to a test. */
+    uncategorizedRows: { type: Number, default: 0 },
     rowErrors: { type: [rowErrorSchema], default: [] },
     /** Normalised, validated question payloads waiting to be committed. Cleared after commit. */
     payload: { type: [Schema.Types.Mixed], default: [], select: false },

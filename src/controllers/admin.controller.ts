@@ -3,7 +3,7 @@ import { adminDashboard } from '../services/analytics.service.js';
 import { audit, listAuditLogs } from '../services/audit.service.js';
 import * as userService from '../services/user.service.js';
 import { adminListOrders } from '../services/payment.service.js';
-import { ok, paginated } from '../utils/ApiResponse.js';
+import { created, ok, paginated } from '../utils/ApiResponse.js';
 
 export async function dashboard(_req: Request, res: Response) {
   return ok(res, await adminDashboard());
@@ -16,6 +16,43 @@ export async function listStudents(req: Request, res: Response) {
 
 export async function getStudent(req: Request, res: Response) {
   return ok(res, await userService.studentDetail(String(req.params.id)));
+}
+
+export async function studentStats(_req: Request, res: Response) {
+  return ok(res, await userService.studentStats());
+}
+
+export async function exportStudents(req: Request, res: Response) {
+  const csv = await userService.exportStudentsCsv(req.query as never);
+  await audit(req, { action: 'student.export', entityType: 'User', summary: 'Exported students CSV', metadata: { query: req.query } });
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="students-${new Date().toISOString().slice(0, 10)}.csv"`);
+  res.setHeader('Cache-Control', 'no-store');
+  res.send(csv);
+}
+
+export async function createStudent(req: Request, res: Response) {
+  const user = await userService.createStudent(req.body);
+  await audit(req, { action: 'student.create', entityType: 'User', entityId: user.id, summary: user.email });
+  return created(res, user, 'Student created');
+}
+
+export async function updateStudent(req: Request, res: Response) {
+  const user = await userService.updateStudent(String(req.params.id), req.body);
+  await audit(req, { action: 'student.update', entityType: 'User', entityId: user.id, summary: user.email, metadata: { fields: Object.keys(req.body) } });
+  return ok(res, user, 'Student updated');
+}
+
+export async function resetStudentPassword(req: Request, res: Response) {
+  const user = await userService.adminResetPassword(String(req.params.id), req.body.password);
+  await audit(req, { action: 'student.reset_password', entityType: 'User', entityId: user.id, summary: user.email });
+  return ok(res, null, 'Password reset. The student has been signed out of all devices.');
+}
+
+export async function deleteStudent(req: Request, res: Response) {
+  const out = await userService.deleteStudent(String(req.params.id));
+  await audit(req, { action: 'student.delete', entityType: 'User', entityId: String(req.params.id), summary: out.email, metadata: out.removed });
+  return ok(res, out, 'Student deleted');
 }
 
 export async function setStudentStatus(req: Request, res: Response) {
